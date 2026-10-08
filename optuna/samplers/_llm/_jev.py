@@ -12,6 +12,7 @@ URL = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
 MODEL = "typesafe-ai/jev"
 RETRY_DELAYS_S = (1.0, 4.0, 12.0)
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+PRICE_PER_INPUT_TOKEN_USD = 0.042 / 1e6  # typesafe-ai/jev list price, 2026-10
 
 
 def boolean(instructions: str, true: str = "", false: str = "") -> dict[str, Any]:
@@ -71,8 +72,12 @@ class Jev:
         self.last_latency_s = time.perf_counter() - t0
         meta = data.get("providerMetadata") or {}
         self.calls += 1
-        self.usd += float((meta.get("gateway") or {}).get("cost") or 0.0)
-        self.input_tokens += int((data.get("usage") or {}).get("inputTokens") or 0)
+        tokens_in = int((data.get("usage") or {}).get("inputTokens") or 0)
+        cost = float((meta.get("gateway") or {}).get("cost") or 0.0)
+        if cost <= 0.0:
+            cost = tokens_in * PRICE_PER_INPUT_TOKEN_USD  # list price; output tokens are free
+        self.usd += cost
+        self.input_tokens += tokens_in
         out: dict[str, dict[str, Any]] = {}
         for name, raw in (data.get("answers") or {}).items():
             if raw.get("type") == "boolean":
