@@ -127,7 +127,8 @@ class Rung:
         rungs = list(trial.user_attrs.get("ladder:rungs") or [])
         rungs.append([self.budget, value])
         trial.set_user_attr("ladder:rungs", rungs)
-        trial.set_user_attr("ladder:compute", sum(b for b, _ in rungs))
+        spent = max(b for b, _ in rungs) if self.ladder.cumulative else sum(b for b, _ in rungs)
+        trial.set_user_attr("ladder:compute", spent)
         if self.is_last:
             self.ladder._check_frozen(trial, value)
             return
@@ -191,6 +192,9 @@ class Ladder(BasePruner):
             study's sampler has one, else a new one.
         fallback_sd: Scale for the interval while fewer than four candidates have completed;
             defaults to the seed SD from :meth:`Study.register_noise` when present.
+        cumulative: Rungs continue the previous one (a warm start), so the compute a trial
+            spends is the largest budget it reached. ``False`` means every rung restarts and
+            compute is the sum of the budgets run.
     """
 
     def __init__(
@@ -205,6 +209,7 @@ class Ladder(BasePruner):
         seed: int = 0,
         ledger: Ledger | None = None,
         fallback_sd: float | None = None,
+        cumulative: bool = True,
     ) -> None:
         budgets = [float(b) for b in rungs]
         if len(budgets) < 2 or any(b <= 0 for b in budgets) or budgets != sorted(budgets):
@@ -220,6 +225,7 @@ class Ladder(BasePruner):
         self._seed = seed
         self._ledger = ledger
         self._fallback_sd = fallback_sd
+        self.cumulative = cumulative
         self._bound = False
 
     @property

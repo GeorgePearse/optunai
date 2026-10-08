@@ -186,7 +186,7 @@ def test_ladder_kills_a_flat_candidate_and_counts_compute(tmp_path: Any) -> None
     assert bad.user_attrs["ladder:status_reason"] == "actively_stopped"
     assert bad.user_attrs["ladder:stop_reason"] == "ladder_kill"
     assert bad.user_attrs["ladder:predicted"][-1]["decision"] == "defer"
-    assert bad.user_attrs["ladder:compute"] < sum(BUDGETS)
+    assert bad.user_attrs["ladder:compute"] < BUDGETS[-1]
     assert ladder.compute(study) == pytest.approx(
         sum(t.user_attrs["ladder:compute"] for t in study.trials)
     )
@@ -552,9 +552,13 @@ def test_pruner_state_lists_divergence_not_infra(tmp_path: Any) -> None:
             return ModelResponse(text, json.loads(text), self.name, 10, 5, 0.0, 0.0)
 
     judge = P()
-    pruner = LLMPruner(judge, n_startup_trials=1, ledger=Ledger(tmp_path / "l.jsonl"))
+    pruner = LLMPruner(
+        judge, n_startup_trials=1, aggressive=True, ledger=Ledger(tmp_path / "l.jsonl")
+    )
     ladder = Ladder(rungs=[1.0, 2.0, 3.0])
-    study = optuna.create_study(direction="minimize", pruner=pruner)
+    study = optuna.create_study(
+        direction="minimize", pruner=pruner, sampler=optuna.samplers.RandomSampler(seed=0)
+    )
 
     def objective(trial: optuna.Trial) -> float:
         x = trial.suggest_float("x", 0, 1)
