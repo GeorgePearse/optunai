@@ -71,3 +71,16 @@ Benchmarks compare `RandomSampler`, `TPESampler`, `CmaEsSampler` (where the spac
 trials and against USD. The pruner is compared with `MedianPruner` and no pruning on steps
 spent, final best and false-prune rate. Costs, fallback rates and schema-violation rates are
 reported per model. See the README for the table and `benchmarks/` for the scripts.
+
+
+## Second layer: ladder discipline
+
+`optuna/ladder/` adds the experimental discipline of a scaling ladder on top of the sampler and
+pruner: rung fidelity with fitted extrapolation (`Ladder`, a pruner), a formal decision enum,
+pre-registered thresholds from seed noise (`Study.register_noise`), fresh-seed acceptance on a
+consumable holdout (`Study.holdout`, `Study.accept`), the near-optimal test
+(`Study.near_optimal_check`), and run statuses that are never deleted. The sampler receives all
+of it as prompt context and schema fields, and Jev can gate proposals whose stated effect is
+below the threshold. The mapping from the post that motivated it, and what was left out, is in
+[scaling-ladder.md](scaling-ladder.md). Registration edits: one import line in
+`optuna/__init__.py` and five short delegations on `Study`.
