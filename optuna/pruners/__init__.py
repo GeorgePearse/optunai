@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 from optuna.pruners._base import BasePruner
 from optuna.pruners._hyperband import HyperbandPruner
+from optuna.pruners._llm import LLMPruner
 from optuna.pruners._median import MedianPruner
 from optuna.pruners._nop import NopPruner
 from optuna.pruners._patient import PatientPruner
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BasePruner",
     "HyperbandPruner",
+    "LLMPruner",
     "MedianPruner",
     "NopPruner",
     "PatientPruner",

@@ -1,0 +1,4 @@
+{"ts": "2026-10-08T00:02:39.169+00:00", "kind": "trial_end", "study": "s", "trial": 0, "state": "COMPLETE", "values": [8.238275816566295], "source": "startup", "improved": true}
+{"ts": "2026-10-08T00:02:39.234+00:00", "kind": "call", "study": "s", "trial": 1, "purpose": "propose", "model": "fake/model", "prompt_hash": "668b96ed8c1e", "tokens_in": 100, "tokens_out": 20, "usd": 0.001, "latency_s": 0.01, "error": null}
+{"ts": "2026-10-08T00:02:39.292+00:00", "kind": "proposal", "study": "s", "trial": 1, "source": "llm", "params": {"kind": "a", "n": 3, "x": 0.5}, "new_params": {}, "hypothesis": "h", "evidence": [], "model": "fake/model", "prompt_hash": "668b96ed8c1e", "best_at_proposal": 8.238275816566295}
+{"ts": "2026-10-08T00:02:39.309+00:00", "kind": "trial_end", "study": "s", "trial": 1, "state": "COMPLETE", "values": [3.25], "source": "llm", "improved": true}

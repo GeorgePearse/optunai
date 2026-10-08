@@ -407,6 +407,7 @@ class Study:
         callbacks: Iterable[Callable[[Study, FrozenTrial], None]] | None = None,
         gc_after_trial: bool = False,
         show_progress_bar: bool = False,
+        allow_new_params: bool = False,
     ) -> None:
         """Optimize an objective function.
 
@@ -494,11 +495,17 @@ class Study:
                 Flag to show progress bars or not. To show progress bar, set this :obj:`True`.
                 Note that it is disabled when ``n_trials`` is :obj:`None`,
                 ``timeout`` is not :obj:`None`, and ``n_jobs`` :math:`\\ne 1`.
+            allow_new_params:
+                Let an :class:`~optuna.samplers.LLMSampler` add parameters the objective did not
+                ask for; the objective reads them with ``trial.params.get(name, default)``.
+                Ignored by other samplers.
 
         Raises:
             RuntimeError:
                 If nested invocation of this method occurs.
         """
+        if allow_new_params:
+            self._storage.set_study_system_attr(self._study_id, "llm:allow_new_params", True)
         _optimize(
             study=self,
             func=func,
