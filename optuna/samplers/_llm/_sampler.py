@@ -208,7 +208,7 @@ class LLMSampler(BaseSampler):
             allow_new_params=allow_new,
             max_trials=self._max_trials_in_prompt,
         )
-        schema = proposal_schema(self._n_parallel, allow_new)
+        schema = proposal_schema(search_space, self._n_parallel, allow_new)
         response = self._model.complete(self._system_prompt, user, schema)
         self._ledger.write(
             "call",

@@ -131,11 +131,28 @@ def read_context(
     return text
 
 
-def proposal_schema(n: int, allow_new_params: bool) -> dict[str, Any]:
+def _param_schema(dist: BaseDistribution) -> dict[str, Any]:
+    if isinstance(dist, FloatDistribution):
+        return {"type": "number", "minimum": dist.low, "maximum": dist.high}
+    if isinstance(dist, IntDistribution):
+        return {"type": "integer", "minimum": dist.low, "maximum": dist.high}
+    if isinstance(dist, CategoricalDistribution):
+        return {"enum": list(dist.choices)}
+    return {}
+
+
+def proposal_schema(
+    search_space: dict[str, BaseDistribution], n: int, allow_new_params: bool
+) -> dict[str, Any]:
     proposal: dict[str, Any] = {
         "type": "object",
         "properties": {
-            "params": {"type": "object", "additionalProperties": True},
+            "params": {
+                "type": "object",
+                "properties": {k: _param_schema(d) for k, d in search_space.items()},
+                "required": list(search_space),
+                "additionalProperties": False,
+            },
             "hypothesis": {"type": "string"},
             "evidence": {"type": "array", "items": {"type": "integer"}},
         },
