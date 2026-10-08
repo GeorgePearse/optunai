@@ -9,12 +9,11 @@ import argparse
 import math
 from typing import Any
 
-import optuna
-
 from benchmarks.llm.common import load_env
 from benchmarks.llm.common import parse_seeds
 from benchmarks.llm.common import run
 from benchmarks.llm.common import summarise
+import optuna
 
 
 def ackley(trial: optuna.Trial) -> float:

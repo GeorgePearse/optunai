@@ -14,7 +14,6 @@ import argparse
 from typing import Any
 
 import numpy as np
-import optuna
 from sklearn.datasets import load_breast_cancer
 from sklearn.datasets import load_digits
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -25,6 +24,7 @@ from benchmarks.llm.common import load_env
 from benchmarks.llm.common import parse_seeds
 from benchmarks.llm.common import run
 from benchmarks.llm.common import summarise
+import optuna
 
 
 def dataset(name: str) -> tuple[np.ndarray, np.ndarray]:
