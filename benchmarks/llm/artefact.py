@@ -279,7 +279,66 @@ def regret_series(
     return out
 
 
-def render(summary: dict[str, Any], notes: dict[str, str]) -> str:
+def trax_section(trax: dict[str, Any], note: str) -> str:
+    """Experiments (trials) proving Beliefs (hypotheses): a two-column graph and a table."""
+    rows = trax["experiments"]
+    n = len(rows)
+    if n == 0:
+        return ""
+    height = 24 * n + 40
+    parts = [
+        f"<svg viewBox='0 0 {W} {height}' class='chart' role='img' aria-label='experiments proving beliefs'>"
+    ]
+    parts.append(
+        "<text x='70' y='18' class='label' text-anchor='middle'>Experiment (trial)</text>"
+    )
+    parts.append(
+        f"<text x='{W - 150}' y='18' class='label' text-anchor='middle'>Belief (hypothesis)</text>"
+    )
+    for i, r in enumerate(rows):
+        y = 40 + 24 * i
+        good = r.get("valence") == 1.0
+        color = (
+            "var(--good)"
+            if good
+            else ("var(--bad)" if r.get("valence") == -1.0 else "var(--muted)")
+        )
+        parts.append(
+            f"<line x1='120' y1='{y}' x2='{W - 290}' y2='{y}' stroke='{color}' stroke-width='2' opacity='0.8'>"
+            f"<title>trial {r['trial']}: {html.escape(str(r.get('outcome')))}</title></line>"
+        )
+        parts.append(f"<circle cx='110' cy='{y}' r='5' fill='var(--c0)'/>")
+        parts.append(
+            f"<text x='100' y='{y + 4}' class='tick' text-anchor='end'>trial {r['trial']}</text>"
+        )
+        parts.append(f"<circle cx='{W - 280}' cy='{y}' r='5' fill='var(--c1)'/>")
+        title = (r.get("belief_title") or "")[:44]
+        parts.append(f"<text x='{W - 268}' y='{y + 4}' class='tick'>{html.escape(title)}</text>")
+    parts.append("</svg>")
+    graph = (
+        f"<figure><figcaption>{html.escape(trax['study'])}: each trial is an Experiment with a <code>proves</code> edge "
+        f"to the Belief its hypothesis states; edge colour = valence set at trial end (green: improved the best at proposal time, red: did not)</figcaption>"
+        + "".join(parts)
+        + "</figure>"
+    )
+    table_rows = [
+        [
+            r["trial"],
+            html.escape((r.get("belief_title") or "")[:160]),
+            "improved" if r.get("valence") == 1.0 else ("no" if r.get("valence") == -1.0 else "–"),
+            html.escape(str(r.get("outcome") or "")[:60]),
+        ]
+        for r in rows
+    ]
+    return (
+        f"<section><h2>Traceability: trials as Experiments proving Beliefs (trackinizer)</h2>{note}"
+        f"{graph}{table(['trial', 'belief (hypothesis, truncated)', 'valence', 'outcome'], table_rows)}</section>"
+    )
+
+
+def render(
+    summary: dict[str, Any], notes: dict[str, str], trax: dict[str, Any] | None = None
+) -> str:
     sections = []
     sections.append(f"<section><h2>Design</h2>{notes.get('design', '')}</section>")
     # synthetic
@@ -440,6 +499,8 @@ def render(summary: dict[str, Any], notes: dict[str, str]) -> str:
             )
             + "</section>"
         )
+    if trax:
+        sections.append(trax_section(trax, notes.get("trax", "")))
     sections.append(f"<section><h2>Verdict</h2>{notes.get('verdict', '')}</section>")
     sections.append(f"<section><h2>Method and cost</h2>{notes.get('method', '')}</section>")
     body = "".join(sections)
@@ -448,7 +509,7 @@ def render(summary: dict[str, Any], notes: dict[str, str]) -> str:
 <title>optunai LLM sampler vs TPE</title>
 <style>
 :root {{ --bg:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.1);
-  --c0:{SLOTS[0][0]}; --c1:{SLOTS[1][0]}; --c2:{SLOTS[2][0]}; --c3:{SLOTS[3][0]}; --c4:{SLOTS[4][0]}; --c5:{SLOTS[5][0]}; --c6:{SLOTS[6][0]}; --c7:{SLOTS[7][0]}; }}
+  --good:#0ca30c; --bad:#d03b3b; --c0:{SLOTS[0][0]}; --c1:{SLOTS[1][0]}; --c2:{SLOTS[2][0]}; --c3:{SLOTS[3][0]}; --c4:{SLOTS[4][0]}; --c5:{SLOTS[5][0]}; --c6:{SLOTS[6][0]}; --c7:{SLOTS[7][0]}; }}
 @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ --bg:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7; --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.1);
   --c0:{SLOTS[0][1]}; --c1:{SLOTS[1][1]}; --c2:{SLOTS[2][1]}; --c3:{SLOTS[3][1]}; --c4:{SLOTS[4][1]}; --c5:{SLOTS[5][1]}; --c6:{SLOTS[6][1]}; --c7:{SLOTS[7][1]}; }} }}
 :root[data-theme="dark"] {{ --bg:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7; --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.1);
@@ -532,10 +593,12 @@ def main() -> None:
     ap.add_argument("--summary", default="/var/tmp/optunai/summary.json")
     ap.add_argument("--notes", default="/var/tmp/optunai/notes.md")
     ap.add_argument("--out", default="/var/tmp/optunai/optunai-llm-sampler-20261007.html")
+    ap.add_argument("--trax", default="/var/tmp/optunai/trax.json")
     args = ap.parse_args()
     summary = json.loads(Path(args.summary).read_text())
     notes = md_to_html(Path(args.notes).read_text()) if Path(args.notes).exists() else {}
-    Path(args.out).write_text(render(summary, notes))
+    trax = json.loads(Path(args.trax).read_text()) if Path(args.trax).exists() else None
+    Path(args.out).write_text(render(summary, notes, trax))
     print("wrote", args.out, Path(args.out).stat().st_size, "bytes")
 
 
