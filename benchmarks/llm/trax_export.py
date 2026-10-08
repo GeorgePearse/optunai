@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 import urllib.request
 
 
@@ -38,7 +39,7 @@ def main() -> None:
         for edge in e.get("proves") or []:
             bid = edge["id"]
             if bid not in beliefs:
-                b = get(f"{args.url}/api/inquiries/{bid}")
+                b: dict[str, Any] = get(f"{args.url}/api/inquiries/{bid}")  # type: ignore[assignment]
                 beliefs[bid] = {
                     "id": bid,
                     "title": b.get("title"),

@@ -119,7 +119,7 @@ def run(
     sampler = make_sampler(arm, seed, context, ledger_path)
     study = optuna.create_study(
         study_name=f"{bench}/{problem}/{arm}/seed{seed}",
-        direction=direction,
+        direction=direction,  # type: ignore[arg-type]
         sampler=sampler,
         pruner=pruner if pruner is not None else optuna.pruners.NopPruner(),
     )

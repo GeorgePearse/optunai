@@ -224,7 +224,7 @@ def evaluate_rungs(
 
 
 def full_params(trial: optuna.trial.BaseTrial) -> dict[str, Any]:
-    params = fewshot.suggest(trial)
+    params = fewshot.suggest(trial)  # type: ignore[arg-type]
     for name in ("prototype_mix", "input_noise", "ensemble", "mixup_alpha", "temperature"):
         if name in trial.params:
             params[name] = trial.params[name]
@@ -381,7 +381,7 @@ def run_study(arm: str, seed: int, context: list[str], force: bool) -> dict[str,
         "problem": "mlp_head",
         "arm": arm,
         "seed": seed,
-        "model": getattr(study.sampler, "model", None) and study.sampler.model.name,  # type: ignore[attr-defined]
+        "model": getattr(getattr(study.sampler, "model", None), "name", None),
         "n_trials": len(rows),
         "search_wall_s": search_wall,
         "wall_s": time.time() - t0,

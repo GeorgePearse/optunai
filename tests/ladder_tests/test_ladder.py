@@ -138,7 +138,9 @@ def test_decision_record_serialises() -> None:
 # ---- the Ladder pruner -------------------------------------------------------------------
 
 
-def make_objective(ladder: Ladder, pool: list[tuple[float, float, float]], noise: float = 0.0):
+def make_objective(
+    ladder: Ladder, pool: list[tuple[float, float, float]], noise: float = 0.0
+) -> Any:
     def objective(trial: optuna.Trial) -> float:
         E, A, g = pool[trial.number % len(pool)]
         rng = random.Random(trial.number)
@@ -193,7 +195,8 @@ def test_ladder_kills_a_flat_candidate_and_counts_compute(tmp_path: Any) -> None
     assert sum(t.state == TrialState.COMPLETE for t in study.trials) >= 4
     report = ladder.fit_report(study)
     assert report["n_units"] >= 4 and report["incumbent"]["trial"] == 0
-    assert ladder.multiplier(study, 0.01) is not None and ladder.multiplier(study, 0.01) > 1.0
+    mult = ladder.multiplier(study, 0.01)
+    assert mult is not None and mult > 1.0
 
 
 def test_ladder_maximize_direction(tmp_path: Any) -> None:
@@ -412,7 +415,9 @@ class FakeJudge:
 
 
 def test_schema_and_ladder_fields() -> None:
-    space = {"x": optuna.distributions.FloatDistribution(0, 1)}
+    space: dict[str, optuna.distributions.BaseDistribution] = {
+        "x": optuna.distributions.FloatDistribution(0, 1)
+    }
     plain = proposal_schema(space, 1, False)
     assert "expected_effect" not in plain["properties"]["proposals"]["items"]["properties"]
     laddered = proposal_schema(space, 1, False, ladder=True, expandable=["x"])
@@ -456,7 +461,7 @@ def test_sampler_prompt_carries_threshold_and_gate_defers(tmp_path: Any) -> None
     model = FakeModel([reply, reply])
     judge = FakeJudge(0.1)
     ledger = Ledger(tmp_path / "l.jsonl")
-    sampler = LLMSampler(model, seed=0, ledger=ledger, gate=0.25, judge=judge)
+    sampler = LLMSampler(model, seed=0, ledger=ledger, gate=0.25, judge=judge)  # type: ignore[arg-type]
     ladder = Ladder(rungs=[1.0, 2.0], ledger=ledger)
     study = optuna.create_study(direction="minimize", sampler=sampler, pruner=ladder)
     text, expandable = ladder_section(study)
@@ -515,7 +520,7 @@ def test_expand_bounds_only_on_boundary(tmp_path: Any) -> None:
     )
 
     def objective(trial: optuna.trial.BaseTrial) -> float:
-        bounds = {}
+        bounds: dict[str, Any] = {}
         st = getattr(trial, "study", None)
         if st is not None:
             bounds = st._storage.get_study_system_attrs(st._study_id).get("ladder:bounds") or {}
