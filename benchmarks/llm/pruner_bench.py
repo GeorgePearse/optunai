@@ -2,7 +2,7 @@
 
 Each trial grows a HistGradientBoostingClassifier with ``warm_start`` in chunks of 10
 iterations up to ``max_iter``, reporting the validation macro F1 after every chunk, so a trial
-has up to 20 intermediate steps. Pruners compared with the same TPE sampler and seeds:
+has up to 15 intermediate steps. Pruners compared with the same TPE sampler and seeds:
 ``none``, ``median`` (MedianPruner) and ``llm`` (LLMPruner, Jev judge with the median floor).
 
 Recorded per run: final best value, total boosting steps spent, pruned count, and the
@@ -66,8 +66,8 @@ def make_problem(name: str, seed: int) -> tuple[Any, Any]:
     def objective(trial: optuna.Trial) -> float:
         params = dict(
             learning_rate=trial.suggest_float("learning_rate", 1e-3, 1.0, log=True),
-            max_iter=trial.suggest_int("max_iter", 40, 200, step=CHUNK),
-            max_leaf_nodes=trial.suggest_int("max_leaf_nodes", 4, 128),
+            max_iter=trial.suggest_int("max_iter", 40, 150, step=CHUNK),
+            max_leaf_nodes=trial.suggest_int("max_leaf_nodes", 4, 64),
             max_depth=trial.suggest_int("max_depth", 2, 16),
             min_samples_leaf=trial.suggest_int("min_samples_leaf", 2, 100),
             l2_regularization=trial.suggest_float("l2_regularization", 1e-6, 10.0, log=True),

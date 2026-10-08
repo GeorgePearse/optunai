@@ -2,7 +2,7 @@
 
 Datasets are the ones scikit-learn ships offline (no download): ``digits`` (1797 x 64, 10
 classes) and ``covtype`` subsample is not offline, so the second is ``breast_cancer`` reshaped
-into a harder problem by using 3-fold CV on 20% label noise. Score = mean 3-fold macro F1,
+into a harder problem by using 3-fold CV on 20% label noise. Score = mean 2-fold macro F1,
 maximised. Each trial reports a per-fold intermediate value so pruners can act on it.
 
 Usage: python -m benchmarks.llm.sklearn_bench --arms random,tpe,llm:claude \
@@ -45,26 +45,26 @@ def dataset(name: str) -> tuple[np.ndarray, np.ndarray]:
 SPACE_DOC = """
 Search space (HistGradientBoostingClassifier):
   learning_rate: float, log, [1e-3, 1.0]
-  max_iter: int, [20, 200]
-  max_leaf_nodes: int, [4, 128]
+  max_iter: int, [20, 150]
+  max_leaf_nodes: int, [4, 64]
   max_depth: int, [2, 16]
   min_samples_leaf: int, [2, 100]
   l2_regularization: float, log, [1e-6, 10.0]
   max_bins: categorical, [32, 64, 128, 255]
-Score: mean macro F1 over 3 stratified folds (maximise). Each fold's running mean is
-reported as an intermediate value at steps 0, 1, 2.
+Score: mean macro F1 over 2 stratified folds (maximise). Each fold's running mean is
+reported as an intermediate value at steps 0 and 1.
 """
 
 
 def make_objective(name: str, seed: int) -> Any:
     x, y = dataset(name)
-    folds = list(StratifiedKFold(n_splits=3, shuffle=True, random_state=seed).split(x, y))
+    folds = list(StratifiedKFold(n_splits=2, shuffle=True, random_state=seed).split(x, y))
 
     def objective(trial: optuna.Trial) -> float:
         params = dict(
             learning_rate=trial.suggest_float("learning_rate", 1e-3, 1.0, log=True),
-            max_iter=trial.suggest_int("max_iter", 20, 200),
-            max_leaf_nodes=trial.suggest_int("max_leaf_nodes", 4, 128),
+            max_iter=trial.suggest_int("max_iter", 20, 150),
+            max_leaf_nodes=trial.suggest_int("max_leaf_nodes", 4, 64),
             max_depth=trial.suggest_int("max_depth", 2, 16),
             min_samples_leaf=trial.suggest_int("min_samples_leaf", 2, 100),
             l2_regularization=trial.suggest_float("l2_regularization", 1e-6, 10.0, log=True),
