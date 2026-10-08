@@ -247,10 +247,14 @@ def equivalent_compute_multiplier(
 
     ``delta_loss`` is the loss the candidate saves relative to the curve's owner (positive =
     candidate better); the result is the factor by which the owner's compute would have to grow
-    to match it (post §2.3). ``None`` when the curve has no slope to convert with.
+    to match it (post §2.3). ``None`` when the curve has no slope to convert with, or when the
+    fitted exponent sits on the search grid's boundary (the form does not describe the curve and
+    the multiplier would be arbitrary).
     """
     if fit.form == "power":
         denom = fit.gamma * (loss_at_target - fit.E)
+        if fit.gamma >= float(GAMMA_GRID[-1]) * 0.999 or fit.gamma <= float(GAMMA_GRID[0]) * 1.001:
+            return None  # exponent on the grid boundary: the form does not describe this curve
     else:
         denom = abs(fit.A)
     if not math.isfinite(denom) or denom <= 0 or fit.source == "pooled_shift":

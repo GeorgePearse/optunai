@@ -190,6 +190,7 @@ def accept(
     max_rounds: int = 1,
     min_effect: float | None = None,
     trial_number: int | None = None,
+    incumbent: dict[str, Any] | None = None,
 ) -> DecisionRecord:
     """Acceptance with fresh seeds on the holdout (post §6.7, §10.1).
 
@@ -206,6 +207,9 @@ def accept(
     With one seed the interval of the paired difference uses ``√2 · seed_SD``; with more it
     uses the paired differences' standard error. ``max_rounds`` is the number of acceptance
     rounds the pre-registered plan allows; ``run_more`` is only returned while a round is left.
+    ``incumbent`` names the parameters to compare against; it defaults to the configuration
+    :func:`register_noise` measured, and to the candidate itself (difference zero, recorded as
+    such) when nothing was registered.
     """
     state = _state(study)
     holdout_fn = state["holdout"]
@@ -238,7 +242,17 @@ def accept(
     selected = study.best_trial if trial_number is None else study.trials[trial_number]
     params = dict(selected.params)
     noise = _sys(study).get("ladder:noise") or {}
-    incumbent_params = (noise.get("params") if isinstance(noise, dict) else None) or params
+    incumbent_params = (
+        incumbent
+        or (noise.get("params") if isinstance(noise, dict) else None)
+        or dict(_sys(study).get("ladder:incumbent", {}).get("params") or {})
+        or params
+    )
+    if incumbent_params is params:
+        _ledger(study).write(
+            "acceptance_note",
+            note="no incumbent registered; the candidate is compared against itself",
+        )
     seed_sd = _sys(study).get("ladder:seed_sd")
     base = seed if seed is not None else _ACCEPT_SEED_BASE + 1000 * round_index
     seeds = [base + i for i in range(max(1, n_seeds))]

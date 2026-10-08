@@ -62,6 +62,17 @@ def css(arm: str) -> str:
     return f"var(--c{SLOT.get(arm, 7)})"
 
 
+def count(v: float | None) -> str:
+    return "–" if v is None else f"{v:.0f}"
+
+
+def _cal(v: dict[str, Any]) -> str:
+    cal = v.get("calibration") or []
+    if not cal:
+        return "–"
+    return f"{sum(c['n_inside'] for c in cal)} / {sum(c['n_frozen'] for c in cal)}"
+
+
 def med(xs: list[float | None]) -> float | None:
     v = [x for x in xs if x is not None and not (isinstance(x, float) and math.isnan(x))]
     return float(np.median(v)) if v else None
@@ -266,12 +277,12 @@ def markdown(rank: dict[str, Any], few: dict[str, Any]) -> str:
     )
     lines += [
         "",
-        "| arm | seeds | best-of-N median [IQR] | fresh-seed re-evaluation | selection-bias gap | holdout (fresh seed) | incumbent holdout | decision per study | near-optimal | USD/study | trials | pruned | deferred |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| arm | seeds | best-of-N median [IQR] | fresh-seed re-evaluation | selection-bias gap | holdout (fresh seed) | incumbent holdout | decision per study | near-optimal | USD/study | trials | pruned | deferred | frozen intervals inside / n |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for arm, v in few["arms"].items():
         lines.append(
-            f"| {ARM_LABEL[arm]} | {v['n_seeds']} | {fmt(v['best_of_n_median'], 4)} {v['best_of_n_iqr']} | {fmt(v['reevaluated_median'], 4)} {v['reevaluated_iqr']} | {fmt(v['selection_bias_gap_median'], 4)} | {fmt(v['holdout_median'], 4)} {v['holdout_iqr']} | {fmt(v['incumbent_holdout_median'], 4)} | {', '.join(v['decisions'])} | {sum(v['near_optimal'])}/{len(v['near_optimal'])} | {fmt(v['usd_median'], 2)} | {fmt(v['n_trials_median'], 0)} | {fmt(v['n_pruned_median'], 0)} | {v['n_deferred_total']} |"
+            f"| {ARM_LABEL[arm]} | {v['n_seeds']} | {fmt(v['best_of_n_median'], 4)} {v['best_of_n_iqr']} | {fmt(v['reevaluated_median'], 4)} {v['reevaluated_iqr']} | {fmt(v['selection_bias_gap_median'], 4)} | {fmt(v['holdout_median'], 4)} {v['holdout_iqr']} | {fmt(v['incumbent_holdout_median'], 4)} | {', '.join(v['decisions'])} | {sum(v['near_optimal'])}/{len(v['near_optimal'])} | {fmt(v['usd_median'], 2)} | {count(v['n_trials_median'])} | {count(v['n_pruned_median'])} | {v['n_deferred_total']} | {_cal(v)} |"
         )
     lines += [
         "",
@@ -414,9 +425,10 @@ def render_html(
                 ", ".join(v["decisions"]),
                 f"{sum(v['near_optimal'])}/{len(v['near_optimal'])}",
                 fmt(v["usd_median"], 2),
-                fmt(v["n_trials_median"], 0),
-                fmt(v["n_pruned_median"], 0),
+                count(v["n_trials_median"]),
+                count(v["n_pruned_median"]),
                 v["n_deferred_total"],
+                _cal(v),
             ]
         )
     study_rows = []
@@ -454,7 +466,7 @@ def render_html(
                 )
                 for a, v in few["arms"].items()
             ],
-            title="Selection-bias gap: fresh-seed re-evaluation minus best-of-N, median over seeds (negative = best-of-N was optimistic)",
+            title="Selection-bias gap: best-of-N minus its fresh-seed re-evaluation, median over seeds (how much the best-of-N overstated)",
             y_label="gap",
             digits=4,
         )
@@ -480,6 +492,7 @@ def render_html(
                 "trials",
                 "pruned",
                 "deferred",
+                "frozen intervals: inside / n",
             ],
             rows,
         )
