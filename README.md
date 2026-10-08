@@ -1,3 +1,112 @@
+# optunai: Optuna with a language-model sampler and pruner
+
+optunai is a fork of [optuna/optuna](https://github.com/optuna/optuna) (v5.0.0, MIT). It keeps
+the `optuna` import path, every storage, the dashboard and every integration, and adds four
+public types plus one keyword:
+
+| Added | What it does |
+|---|---|
+| `optuna.samplers.LLMSampler` | Asks a model for the next trial: it sees the search space, the trial history (values, intermediate values, user attributes), the best trial and any `context` you pass (code, README, prior results). Each proposal carries a `hypothesis` and the trial numbers it cites as `evidence`, stored in `trial.system_attrs` under `llm:*`. Invalid values are coerced or repaired once; a second failure hands the trial to TPE and is counted. |
+| `optuna.pruners.LLMPruner` | Reads the learning curves of the running and completed trials and asks "will this trial beat the best" as a probability (Jev typed evaluation, or any chat model). Runs `MedianPruner` as a floor so it can only prune more, unless `aggressive=True`. |
+| `optuna.samplers.Model` | One LiteLLM-backed model: `Model("openrouter/anthropic/claude-sonnet-5.5")`, `"vertex_ai/gemini-3.5-flash"`, `"openai/qwen3.7-plus"` with an `api_base`, Ollama, and so on. Any object with `name` and `complete(system, user, schema)` works in its place. |
+| `optuna.samplers.Ledger` | Append-only JSONL beside the storage: one line per model call (prompt hash, model, tokens, USD, latency), proposal, fallback, violation, prune decision and trial end. Optional sink that writes each trial into trackinizer as an Experiment with a `proves` edge to its hypothesis Belief. |
+| `study.optimize(..., allow_new_params=True)` | Lets the sampler add a parameter the objective did not declare. It is written to the storage with a declared distribution and read with `trial.params.get(name, default)`. Off by default. |
+
+Design, including what the model is not allowed to do: [docs/design.md](docs/design.md).
+
+## Install
+
+```bash
+pip install "git+https://github.com/GeorgePearse/optunai.git@feat/llm-sampler"
+```
+
+Keys come from the environment (`OPENROUTER_API_KEY`, `GEMINI_API_KEY` or application default
+credentials for Vertex, `AI_GATEWAY_API_KEY` for Jev, provider keys as LiteLLM expects them).
+
+## Example
+
+```python
+import optuna
+
+sampler = optuna.samplers.LLMSampler(
+    "openrouter/anthropic/claude-sonnet-5.5",
+    context=["train.py", "README.md"],   # what the model may read; None = numbers only
+)
+study = optuna.create_study(direction="maximize", sampler=sampler,
+                            pruner=optuna.pruners.LLMPruner())
+study.optimize(objective, n_trials=40)
+
+best = study.best_trial
+print(best.params, best.system_attrs["llm:hypothesis"], best.system_attrs["llm:evidence"])
+print(sampler.ledger.totals())   # USD, calls, proposals, fallbacks, violations
+```
+
+## Benchmarks
+
+Five seeds per arm (fewer where noted), same trial budget per problem, median [IQR] over seeds. Hardware: one shared 16-core CPU VM (no GPU), load 20-80 from other jobs throughout. Models: Claude Sonnet 5.5 via OpenRouter, Gemini 3.5 Flash via Vertex AI, Qwen 3.7 Plus via DashScope, Jev via the Vercel AI Gateway. USD is per study as reported by LiteLLM (list price for Qwen).
+
+| benchmark | arm | best (median [IQR]) | seeds | USD / study | USD / proposal | latency s | fallback | coerced |
+|---|---|---|---|---|---|---|---|---|
+| fewshot/mlp_head (max) | Random | 0.4654 [0.4632, 0.4685] held-out 0.5550 | 5 | 0.00 | – | – | – | – |
+| fewshot/mlp_head (max) | TPE | 0.4704 [0.4663, 0.4710] held-out 0.5616 | 5 | 0.00 | – | – | – | – |
+| fewshot/mlp_head (max) | LLMSampler, context, Claude Sonnet 5.5 (OpenRouter) | 0.4721 [0.4721, 0.4721] held-out 0.5686 | 1 | 3.59 | 0.092 | 8.8 | 0.00 | 0.00 |
+| fewshot/mlp_head (max) | LLMSampler, no context, Gemini 3.5 Flash | 0.4674 [0.4672, 0.4708] held-out 0.5604 | 5 | 1.69 | 0.042 | 14.8 | 0.00 | 0.00 |
+| fewshot/mlp_head (max) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0.4698 [0.4697, 0.4707] held-out 0.5614 | 5 | 3.36 | 0.083 | 20.4 | 0.00 | 0.00 |
+| fewshot/mlp_head (max) | LLMSampler, context + allow_new_params, Gemini 3.5 Flash | 0.4724 [0.4711, 0.4727] held-out 0.5626 | 5 | 4.05 | 0.098 | 26.6 | 0.01 | 0.00 |
+| fewshot/mlp_head (max) | LLMSampler, context, Qwen 3.7 Plus (DashScope) | 0.4716 [0.4688, 0.4716] held-out 0.5673 | 5 | 0.74 | 0.020 | 126.7 | 0.00 | 0.00 |
+| sklearn/breast_cancer_noisy (max) | Random | 0.7459 [0.7456, 0.7588] | 5 | 0.00 | – | – | – | – |
+| sklearn/breast_cancer_noisy (max) | TPE | 0.7516 [0.7510, 0.7624] | 5 | 0.00 | – | – | – | – |
+| sklearn/breast_cancer_noisy (max) | LLMSampler, no context, Gemini 3.5 Flash | 0.7565 [0.7537, 0.7662] | 5 | 1.08 | 0.034 | 13.9 | 0.00 | 0.00 |
+| sklearn/breast_cancer_noisy (max) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0.7566 [0.7516, 0.7589] | 5 | 1.08 | 0.037 | 15.0 | 0.00 | 0.00 |
+| sklearn/digits (max) | Random | 0.9672 [0.9650, 0.9677] | 5 | 0.00 | – | – | – | – |
+| sklearn/digits (max) | TPE | 0.9688 [0.9661, 0.9710] | 5 | 0.00 | – | – | – | – |
+| sklearn/digits (max) | LLMSampler, no context, Gemini 3.5 Flash | 0.9610 [0.9609, 0.9638] | 5 | 1.06 | 0.036 | 15.1 | 0.00 | 0.00 |
+| sklearn/digits (max) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0.9609 [0.9604, 0.9625] | 5 | 1.10 | 0.037 | 15.0 | 0.00 | 0.00 |
+| synthetic/ackley (min) | Random | 17.1400 [15.6976, 17.4129] | 5 | 0.00 | – | – | – | – |
+| synthetic/ackley (min) | TPE | 12.8421 [12.0622, 14.8578] | 5 | 0.00 | – | – | – | – |
+| synthetic/ackley (min) | CMA-ES | 9.6841 [6.8890, 12.1864] | 5 | 0.00 | – | – | – | – |
+| synthetic/ackley (min) | LLMSampler, no context, Claude Sonnet 5.5 | 0 (exact) [0, 0] | 4 | 0.44 | 0.015 | 2.9 | 0.01 | 0.00 |
+| synthetic/ackley (min) | LLMSampler, context, Claude Sonnet 5.5 (OpenRouter) | 0 (exact) [0, 0] | 5 | 0.48 | 0.016 | 3.2 | 0.12 | 0.00 |
+| synthetic/ackley (min) | LLMSampler, no context, Gemini 3.5 Flash | 0 (exact) [0, 0] | 5 | 0.51 | 0.016 | 8.3 | 0.00 | 0.00 |
+| synthetic/ackley (min) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0 (exact) [0, 0] | 5 | 0.57 | 0.018 | 8.5 | 0.00 | 0.00 |
+| synthetic/mixed_toy (min) | Random | 2.0044 [1.4804, 2.2273] | 5 | 0.00 | – | – | – | – |
+| synthetic/mixed_toy (min) | TPE | 1.0942 [0.7044, 1.6189] | 5 | 0.00 | – | – | – | – |
+| synthetic/mixed_toy (min) | CMA-ES | 0.7233 [0.6122, 0.8776] | 5 | 0.00 | – | – | – | – |
+| synthetic/mixed_toy (min) | LLMSampler, no context, Gemini 3.5 Flash | 0 (exact) [0, 0] | 5 | 0.85 | 0.025 | 10.8 | 0.00 | 0.00 |
+| synthetic/mixed_toy (min) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0 (exact) [0, 0] | 5 | 0.60 | 0.021 | 8.5 | 0.00 | 0.00 |
+| synthetic/rosenbrock (min) | Random | 4744.6603 [2913.1496, 8313.3837] | 5 | 0.00 | – | – | – | – |
+| synthetic/rosenbrock (min) | TPE | 327.8316 [302.0974, 720.8814] | 5 | 0.00 | – | – | – | – |
+| synthetic/rosenbrock (min) | CMA-ES | 352.5756 [269.7666, 352.9732] | 5 | 0.00 | – | – | – | – |
+| synthetic/rosenbrock (min) | LLMSampler, context, Claude Sonnet 5.5 (OpenRouter) | 0 (exact) [0, 0] | 3 | 0.38 | 0.013 | 2.6 | 0.15 | 0.00 |
+| synthetic/rosenbrock (min) | LLMSampler, no context, Gemini 3.5 Flash | 0 (exact) [0, 0] | 5 | 0.59 | 0.019 | 7.2 | 0.00 | 0.00 |
+| synthetic/rosenbrock (min) | LLMSampler, context, Gemini 3.5 Flash (Vertex) | 0 (exact) [0, 0] | 5 | 0.67 | 0.020 | 7.7 | 0.00 | 0.00 |
+
+| pruner benchmark | pruner | final best (median [IQR]) | boosting steps (median) | pruned | false-prune rate |
+|---|---|---|---|---|---|
+| breast_cancer_noisy (max) | TPE, no pruner | 0.7692 [0.7162, 0.7832] | 3500 | 0 | 0.00 |
+| breast_cancer_noisy (max) | TPE + MedianPruner | 0.7692 [0.7047, 0.7832] | 2770 | 45 | 0.09 |
+| breast_cancer_noisy (max) | TPE + LLMPruner (Jev, median floor) | 0.7637 [0.7232, 0.7832] | 1810 | 113 | 0.02 |
+| digits (max) | TPE, no pruner | 0.9737 [0.9722, 0.9833] | 2760 | 0 | 0.00 |
+| digits (max) | TPE + MedianPruner | 0.9722 [0.9703, 0.9814] | 2300 | 67 | 0.03 |
+| digits (max) | TPE + LLMPruner (Jev, median floor) | 0.9703 [0.9701, 0.9814] | 1950 | 102 | 0.02 |
+
+Reading: on the textbook functions every LLM arm lands on the exact optimum at its first proposal (recall, not search); on the unpublished mixed toy the numbers-only LLM arm beats TPE's final value at trial 4 and reaches 0 by trial 12 by changing one factor at a time. On gradient boosting it edges TPE on the noisy dataset and loses to TPE and random on digits. On the few-shot head the open-vocabulary arm is the best sampler (it adds `ensemble`, `input_noise`, `mixup_alpha` from the objective's docstring) and the context arm is far ahead over the first ten trials; held-out scores are level across arms. The LLM pruner spends 29-35% fewer steps than the median pruner with a 2% false-prune rate. Claude few-shot and Rosenbrock rows have fewer seeds because OpenRouter credit ran out; its synthetic fallback rate is OpenRouter 402 refusals under parallel load, not model output. Full report with regret curves: gs://visia-agent-artifacts/analysis/optunai-llm-sampler-20261007.html (portal: /admin/analytics-artefacts, name optunai-llm-sampler-20261007; DB registration retrying in tmux `optunai-register`).
+
+## Sync with upstream
+
+```bash
+git remote add upstream https://github.com/optuna/optuna.git   # once
+git fetch upstream && git merge upstream/master
+```
+
+All additions are new modules (`optuna/samplers/_llm/`, `optuna/pruners/_llm.py`,
+`benchmarks/llm/`) plus four small edits: two import lines in `optuna/samplers/__init__.py`, one
+in `optuna/pruners/__init__.py`, one keyword on `Study.optimize`, and package metadata.
+
+---
+
+The upstream README follows.
+
 <div align="center"><img src="https://raw.githubusercontent.com/optuna/optuna/master/docs/image/optuna-logo.png" width="800"/></div>
 
 # Optuna: A hyperparameter optimization framework

@@ -3,8 +3,8 @@ requires = ["setuptools >= 61.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "optuna"
-description = "A hyperparameter optimization framework"
+name = "optunai"
+description = "Optuna with a language-model sampler and pruner (fork of optuna/optuna; import path stays `optuna`)"
 readme = "README.md"
 authors = [
   {name = "Takuya Akiba"}
@@ -31,6 +31,7 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
+  "litellm>=1.103,<2",  # optuna/samplers/_llm.
   "alembic>=1.5.0",
   "colorlog",
   "numpy",
@@ -127,9 +128,9 @@ torchvision = { index = "pytorch-cpu" }
 
 [project.urls]
 homepage = "https://optuna.org/"
-repository = "https://github.com/optuna/optuna"
+repository = "https://github.com/GeorgePearse/optunai"
 documentation = "https://optuna.readthedocs.io"
-bugtracker = "https://github.com/optuna/optuna/issues"
+bugtracker = "https://github.com/GeorgePearse/optunai/issues"
 
 [project.scripts]
 optuna = "optuna.cli:main"
@@ -142,6 +143,7 @@ version = {attr = "optuna.version.__version__"}
 
 [tool.setuptools.package-data]
 "optuna" = [
+  "samplers/_llm/prompts/*.md",
   "storages/_rdb/alembic.ini",
   "storages/_rdb/alembic/*.*",
   "storages/_rdb/alembic/versions/*.*",
@@ -184,6 +186,7 @@ order-by-type = false
 
 [tool.ruff.lint.per-file-ignores]
 "tutorial/**/*.py" = ["E", "W", "F", "I"]
+"benchmarks/**/*.py" = ["E501"]
 "**/alembic/versions/*.py" = ["I"]
 
 [tool.ruff.format]
