@@ -5,7 +5,8 @@ classes) and ``covtype`` subsample is not offline, so the second is ``breast_can
 into a harder problem by using 3-fold CV on 20% label noise. Score = mean 3-fold macro F1,
 maximised. Each trial reports a per-fold intermediate value so pruners can act on it.
 
-Usage: python -m benchmarks.llm.sklearn_bench --arms random,tpe,llm:claude --seeds 0-4 --n-trials 30
+Usage: python -m benchmarks.llm.sklearn_bench --arms random,tpe,llm:claude \
+           --seeds 0-4 --n-trials 30
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def dataset(name: str) -> tuple[np.ndarray, np.ndarray]:
 SPACE_DOC = """
 Search space (HistGradientBoostingClassifier):
   learning_rate: float, log, [1e-3, 1.0]
-  max_iter: int, [20, 400]
+  max_iter: int, [20, 200]
   max_leaf_nodes: int, [4, 128]
   max_depth: int, [2, 16]
   min_samples_leaf: int, [2, 100]
@@ -62,7 +63,7 @@ def make_objective(name: str, seed: int) -> Any:
     def objective(trial: optuna.Trial) -> float:
         params = dict(
             learning_rate=trial.suggest_float("learning_rate", 1e-3, 1.0, log=True),
-            max_iter=trial.suggest_int("max_iter", 20, 400),
+            max_iter=trial.suggest_int("max_iter", 20, 200),
             max_leaf_nodes=trial.suggest_int("max_leaf_nodes", 4, 128),
             max_depth=trial.suggest_int("max_depth", 2, 16),
             min_samples_leaf=trial.suggest_int("min_samples_leaf", 2, 100),

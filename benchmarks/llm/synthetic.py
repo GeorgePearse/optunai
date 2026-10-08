@@ -1,6 +1,7 @@
 """Synthetic benchmark: Ackley, Rosenbrock and a mixed int/categorical toy, minimised.
 
-Usage: python -m benchmarks.llm.synthetic --arms random,tpe,cmaes,llm:claude --seeds 0-4 --n-trials 30
+Usage: python -m benchmarks.llm.synthetic --arms random,tpe,cmaes,llm:claude \
+           --seeds 0-4 --n-trials 30
 """
 
 from __future__ import annotations

@@ -64,6 +64,26 @@ def parse_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _message_text(response: Any) -> str:
+    """The reply text; falls back to reasoning fields when the content is empty."""
+    choice = response.choices[0]
+    message = choice.message
+    text = message.content or ""
+    if text.strip():
+        return text
+    for attr in ("reasoning_content", "reasoning"):
+        value = getattr(message, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    fields = getattr(message, "provider_specific_fields", None) or {}
+    if isinstance(fields, dict):
+        for key in ("reasoning", "refusal"):
+            value = fields.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return text
+
+
 class Model:
     """A chat model behind LiteLLM, with JSON output and cost accounting.
 
@@ -230,7 +250,14 @@ class Model:
                 latency_s=time.perf_counter() - t0,
                 error=f"{type(e).__name__}: {str(e)[:300]}",
             )
-        text = response.choices[0].message.content or ""
+        text = _message_text(response)
+        if not text.strip():
+            # Some gateways answer 200 with an empty message on a transient failure; try once more.
+            try:
+                response, _ = self._complete_once(messages, schema)
+                text = _message_text(response)
+            except Exception:
+                pass
         usage = response.usage
         tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
         tokens_out = int(getattr(usage, "completion_tokens", 0) or 0)

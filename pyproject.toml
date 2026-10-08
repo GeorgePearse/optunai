@@ -185,6 +185,7 @@ order-by-type = false
 
 [tool.ruff.lint.per-file-ignores]
 "tutorial/**/*.py" = ["E", "W", "F", "I"]
+"benchmarks/**/*.py" = ["E501"]
 "**/alembic/versions/*.py" = ["I"]
 
 [tool.ruff.format]

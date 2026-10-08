@@ -221,11 +221,14 @@ class LLMSampler(BaseSampler):
             usd=response.usd,
             latency_s=round(response.latency_s, 3),
             error=response.error,
+            reply_head=None if response.parsed is not None else response.text[:400],
         )
         if response.error:
             raise RuntimeError(response.error)
         if response.parsed is None:
-            raise ProposalError("no JSON object in the model reply")
+            raise ProposalError(
+                f"no JSON object in the model reply ({response.output_tokens} output tokens)"
+            )
         tokens = [response.input_tokens, response.output_tokens]
         usd = response.usd or 0.0
         try:

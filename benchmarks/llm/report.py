@@ -1,6 +1,7 @@
 """Aggregate benchmark result files into summary.json and summary.md.
 
-Usage: python -m benchmarks.llm.report [--results /var/tmp/optunai/results] [--out /var/tmp/optunai]
+Usage: python -m benchmarks.llm.report [--results /var/tmp/optunai/results]
+           [--out /var/tmp/optunai]
 """
 
 from __future__ import annotations

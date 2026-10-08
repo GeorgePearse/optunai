@@ -98,7 +98,7 @@ def load_case(dataset: str, seed: int, n: int) -> dict[str, Any]:
     for name, k in SOURCES.items():
         pool = unit_rows(world[f"pool_vectors_{k}"].astype(np.float32))
         mu = pool.mean(0)
-        sample = pool[rng.choice(len(pool), min(len(pool), 8000), replace=False)] - mu
+        sample = pool[rng.choice(len(pool), min(len(pool), 4000), replace=False)] - mu
         _, s, vt = np.linalg.svd(sample, full_matrices=False)
         var = (s[:WHITEN_DIM] ** 2) / len(sample)
         proj = (vt[:WHITEN_DIM].T / np.sqrt(var + WHITEN_EPS * var.mean())).astype(np.float32)

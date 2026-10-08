@@ -62,7 +62,10 @@ def parse_seeds(text: str) -> list[int]:
 def make_sampler(
     arm: str, seed: int, context: Any, ledger_path: Path
 ) -> optuna.samplers.BaseSampler:
-    """``random`` | ``tpe`` | ``cmaes`` | ``llm[-noctx|-new]:<model key>``; ``+<pruner>`` is ignored."""
+    """``random`` | ``tpe`` | ``cmaes`` | ``llm[-noctx|-new]:<model key>``.
+
+    A ``+<pruner>`` suffix is ignored here (the pruner benchmark uses it to name runs).
+    """
     arm = arm.split("+")[0]
     if arm == "random":
         return optuna.samplers.RandomSampler(seed=seed)
