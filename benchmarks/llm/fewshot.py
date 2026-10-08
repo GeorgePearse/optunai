@@ -12,19 +12,21 @@ for the final best trial, to measure how much the optimiser overfits the seen ca
 Each trial sets ``user_attr["per_case"]`` with the score of every seen case, so a sampler that
 reads attributes can see where a configuration wins or loses.
 
-Search space (13 dims, all read with ``trial.suggest_*``; PCA whitening is left out because the
-SVD is too slow on this shared box):
+Each embedder's unit vectors go through a fixed Gaussian random projection to 384 dims before the
+head (JL projection; the full 2560/1280-dim rows made a trial take minutes on this shared box).
+
+Search space (13 dims, all read with ``trial.suggest_*``):
   space:            categorical  cradio | dinov3 | concat   (which embedders; concat = both side by side)
   cradio_weight:    float  [0.25, 4.0] log   block weight of C-RADIO relative to DINOv3 in concat
   centre:           categorical  True | False  subtract the pool mean before unit-normalising
-  hidden:           categorical  0 | 128 | 256 | 512 | 1024   (0 = linear head)
+  hidden:           categorical  0 | 64 | 128 | 256 | 512   (0 = linear head)
   activation:       categorical  gelu | relu | silu
   dropout:          float  [0.0, 0.6]
   lr:               float  [1e-4, 2e-2] log   AdamW peak learning rate (OneCycle)
   weight_decay:     float  [1e-6, 1e-1] log
-  epochs:           int    [2, 40]
-  min_steps:        int    [50, 1200] log  floor on optimiser steps (small n gives few steps per epoch)
-  batch:            int    [16, 1024] log
+  epochs:           int    [2, 20]
+  min_steps:        int    [50, 400] log   floor on optimiser steps (small n gives few steps per epoch)
+  batch:            int    [32, 512] log
   cw:               float  [0.0, 1.0]   class-weight exponent, weight = (max_count / count) ** cw
   label_smoothing:  float  [0.0, 0.3]
 
@@ -62,6 +64,7 @@ CACHE = Path("/var/tmp/optunai/fewshot-cache")
 SEEN_CASES = [(d, s, n) for d in ("municipals", "vmi_ewaste") for s in (0, 1) for n in (80, 400)]
 HELDOUT_CASES = [(d, 2, n) for d in ("municipals", "vmi_ewaste") for n in (80, 400)]
 SOURCES = {"cradio": 0, "dinov3": 1}
+PROJ_DIM = 384
 
 
 def unit_rows(x: np.ndarray) -> np.ndarray:
@@ -96,9 +99,14 @@ def load_case(dataset: str, seed: int, n: int) -> dict[str, Any]:
     }
     for name, k in SOURCES.items():
         pool = unit_rows(world[f"pool_vectors_{k}"].astype(np.float32))
-        out[f"train_{name}"] = pool[pick]
-        out[f"query_{name}"] = unit_rows(world[f"query_vectors_{k}"].astype(np.float32))
-        out[f"mu_{name}"] = pool.mean(0)
+        # Fixed Gaussian random projection to PROJ_DIM per embedder (Johnson-Lindenstrauss): the
+        # head sees 384 or 768 inputs instead of 2560 or 3840, which keeps a trial under a minute.
+        proj = np.random.default_rng(7).standard_normal((pool.shape[1], PROJ_DIM)).astype(
+            np.float32
+        ) / np.sqrt(PROJ_DIM)
+        out[f"train_{name}"] = pool[pick] @ proj
+        out[f"query_{name}"] = unit_rows(world[f"query_vectors_{k}"].astype(np.float32)) @ proj
+        out[f"mu_{name}"] = pool.mean(0) @ proj
     np.savez(path, **out)
     return out
 
@@ -123,7 +131,7 @@ def train_head(
 ) -> Any:
     import torch
 
-    torch.set_num_threads(int(os.environ.get("OPTUNAI_TORCH_THREADS", "4")))
+    torch.set_num_threads(int(os.environ.get("OPTUNAI_TORCH_THREADS", "1")))
     torch.manual_seed(seed)
     gen = torch.Generator().manual_seed(seed)
     d, hidden = x.shape[1], int(params["hidden"])
@@ -226,14 +234,14 @@ def suggest(trial: optuna.Trial) -> dict[str, Any]:
         space=trial.suggest_categorical("space", ["cradio", "dinov3", "concat"]),
         cradio_weight=trial.suggest_float("cradio_weight", 0.25, 4.0, log=True),
         centre=trial.suggest_categorical("centre", [True, False]),
-        hidden=trial.suggest_categorical("hidden", [0, 128, 256, 512, 1024]),
+        hidden=trial.suggest_categorical("hidden", [0, 64, 128, 256, 512]),
         activation=trial.suggest_categorical("activation", ["gelu", "relu", "silu"]),
         dropout=trial.suggest_float("dropout", 0.0, 0.6),
         lr=trial.suggest_float("lr", 1e-4, 2e-2, log=True),
         weight_decay=trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True),
-        epochs=trial.suggest_int("epochs", 2, 40),
-        min_steps=trial.suggest_int("min_steps", 50, 1200, log=True),
-        batch=trial.suggest_int("batch", 16, 1024, log=True),
+        epochs=trial.suggest_int("epochs", 2, 20),
+        min_steps=trial.suggest_int("min_steps", 50, 400, log=True),
+        batch=trial.suggest_int("batch", 32, 512, log=True),
         cw=trial.suggest_float("cw", 0.0, 1.0),
         label_smoothing=trial.suggest_float("label_smoothing", 0.0, 0.3),
     )

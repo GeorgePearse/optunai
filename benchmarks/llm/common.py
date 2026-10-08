@@ -79,12 +79,18 @@ def make_sampler(
     if not kind.startswith("llm"):
         raise ValueError(f"unknown arm {arm!r}")
     model = MODELS[model_key]()
+    sink = None
+    trackinizer = os.environ.get("OPTUNAI_TRACKINIZER")
+    if trackinizer:
+        from optuna.samplers._llm import TrackinizerSink
+
+        sink = TrackinizerSink(trackinizer)
     return LLMSampler(
         model,
         context=None if kind == "llm-noctx" else context,
         allow_new_params=kind == "llm-new",
         seed=seed,
-        ledger=Ledger(ledger_path),
+        ledger=Ledger(ledger_path, sink=sink),
     )
 
 

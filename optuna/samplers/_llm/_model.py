@@ -262,6 +262,22 @@ class Model:
         tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
         tokens_out = int(getattr(usage, "completion_tokens", 0) or 0)
         usd = self._cost(response)
+        if not text.strip():
+            try:
+                dump = json.dumps(response.model_dump(), default=str)[:800]
+            except Exception:
+                dump = repr(response)[:800]
+            self.calls += 1
+            return ModelResponse(
+                text="",
+                parsed=None,
+                model=self.name,
+                input_tokens=tokens_in,
+                output_tokens=tokens_out,
+                usd=usd,
+                latency_s=time.perf_counter() - t0,
+                error=f"empty reply: {dump}",
+            )
         parsed = parse_json(text) if schema is not None else None
         if schema is not None and parsed is None and text:
             repair = messages + [
