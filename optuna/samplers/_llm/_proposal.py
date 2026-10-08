@@ -351,11 +351,19 @@ def materialise_new_param(spec: Any) -> tuple[str, BaseDistribution, Any, str]:
         log = bool(spec.get("log", False))
         if log and low <= 0:
             raise ProposalError(f"new parameter {name!r}: log scale needs low > 0")
+        step = spec.get("step")
+        try:
+            step_f = float(step) if step is not None else None
+        except (TypeError, ValueError):
+            step_f = None
+        if step_f is not None and step_f <= 0:
+            step_f = None  # a zero or negative step means "no step"
         if kind == "int":
-            dist = IntDistribution(int(low), int(high), log=log, step=int(spec.get("step") or 1))
+            dist = IntDistribution(
+                int(low), int(high), log=log, step=max(1, int(step_f)) if step_f else 1
+            )
         else:
-            step = spec.get("step")
-            dist = FloatDistribution(low, high, log=log, step=float(step) if step else None)
+            dist = FloatDistribution(low, high, log=log, step=step_f)
     else:
         raise ProposalError(f"new parameter {name!r} has unknown type {kind!r}")
     value, _ = validate_params({name: spec["value"]}, {name: dist})
