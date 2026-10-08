@@ -12,9 +12,10 @@ for the final best trial, to measure how much the optimiser overfits the seen ca
 Each trial sets ``user_attr["per_case"]`` with the score of every seen case, so a sampler that
 reads attributes can see where a configuration wins or loses.
 
-Search space (13 dims, all read with ``trial.suggest_*``):
-  space:            categorical  cradio | dinov3 | concat | wstack2  (which embedders, raw or PCA-whitened)
-  cradio_weight:    float  [0.25, 4.0] log   block weight of C-RADIO relative to DINOv3 in concat/wstack2
+Search space (13 dims, all read with ``trial.suggest_*``; PCA whitening is left out because the
+SVD is too slow on this shared box):
+  space:            categorical  cradio | dinov3 | concat   (which embedders; concat = both side by side)
+  cradio_weight:    float  [0.25, 4.0] log   block weight of C-RADIO relative to DINOv3 in concat
   centre:           categorical  True | False  subtract the pool mean before unit-normalising
   hidden:           categorical  0 | 128 | 256 | 512 | 1024   (0 = linear head)
   activation:       categorical  gelu | relu | silu
@@ -60,8 +61,6 @@ WORLDS = Path(os.environ.get("DATA_CURVE_CACHE", Path.home() / ".cache/visia_dat
 CACHE = Path("/var/tmp/optunai/fewshot-cache")
 SEEN_CASES = [(d, s, n) for d in ("municipals", "vmi_ewaste") for s in (0, 1) for n in (80, 400)]
 HELDOUT_CASES = [(d, 2, n) for d in ("municipals", "vmi_ewaste") for n in (80, 400)]
-WHITEN_DIM = 256
-WHITEN_EPS = 1e-3
 SOURCES = {"cradio": 0, "dinov3": 1}
 
 
@@ -97,34 +96,20 @@ def load_case(dataset: str, seed: int, n: int) -> dict[str, Any]:
     }
     for name, k in SOURCES.items():
         pool = unit_rows(world[f"pool_vectors_{k}"].astype(np.float32))
-        mu = pool.mean(0)
-        sample = pool[rng.choice(len(pool), min(len(pool), 4000), replace=False)] - mu
-        _, s, vt = np.linalg.svd(sample, full_matrices=False)
-        var = (s[:WHITEN_DIM] ** 2) / len(sample)
-        proj = (vt[:WHITEN_DIM].T / np.sqrt(var + WHITEN_EPS * var.mean())).astype(np.float32)
         out[f"train_{name}"] = pool[pick]
         out[f"query_{name}"] = unit_rows(world[f"query_vectors_{k}"].astype(np.float32))
-        out[f"mu_{name}"] = mu
-        out[f"proj_{name}"] = proj
+        out[f"mu_{name}"] = pool.mean(0)
     np.savez(path, **out)
     return out
 
 
 def features(case: dict[str, Any], params: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     space = params["space"]
-    names = {
-        "cradio": ["cradio"],
-        "dinov3": ["dinov3"],
-        "concat": ["cradio", "dinov3"],
-        "wstack2": ["cradio", "dinov3"],
-    }[space]
+    names = {"cradio": ["cradio"], "dinov3": ["dinov3"], "concat": ["cradio", "dinov3"]}[space]
     blocks_train, blocks_query = [], []
     for name in names:
         tr, q = case[f"train_{name}"], case[f"query_{name}"]
-        if space == "wstack2":
-            tr = unit_rows((tr - case[f"mu_{name}"]) @ case[f"proj_{name}"])
-            q = unit_rows((q - case[f"mu_{name}"]) @ case[f"proj_{name}"])
-        elif params["centre"]:
+        if params["centre"]:
             tr = unit_rows(tr - case[f"mu_{name}"])
             q = unit_rows(q - case[f"mu_{name}"])
         w = float(params["cradio_weight"]) if (name == "cradio" and len(names) == 2) else 1.0
@@ -238,7 +223,7 @@ def score_case(case: dict[str, Any], params: dict[str, Any], seed: int) -> float
 
 def suggest(trial: optuna.Trial) -> dict[str, Any]:
     return dict(
-        space=trial.suggest_categorical("space", ["cradio", "dinov3", "concat", "wstack2"]),
+        space=trial.suggest_categorical("space", ["cradio", "dinov3", "concat"]),
         cradio_weight=trial.suggest_float("cradio_weight", 0.25, 4.0, log=True),
         centre=trial.suggest_categorical("centre", [True, False]),
         hidden=trial.suggest_categorical("hidden", [0, 128, 256, 512, 1024]),
