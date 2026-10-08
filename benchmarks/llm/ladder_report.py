@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 
+from benchmarks.llm import artefact as _artefact
 from benchmarks.llm.artefact import bar_chart
 from benchmarks.llm.artefact import fmt
 from benchmarks.llm.artefact import SLOTS
@@ -56,6 +57,9 @@ SLOT = {
     "llm-noise": 2,
     "llm-ladder": 7,
 }
+
+
+_artefact.ARM_SLOT.update(SLOT)
 
 
 def css(arm: str) -> str:
@@ -316,10 +320,16 @@ def mapping_rows(doc: Path) -> list[list[str]]:
         if in_table and line.startswith("|"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if len(cells) == 3:
-                rows.append([inline_md(c) for c in cells])
+                rows.append([f"<span>{inline_md(c)}</span>" for c in cells])
         elif in_table and not line.strip():
             break
     return rows
+
+
+def inline_md_keep(text: str) -> str:
+    """Code spans and emphasis on text that is already HTML-safe (from md_to_html)."""
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    return re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
 
 
 def inline_md(text: str) -> str:
@@ -359,17 +369,40 @@ def scatter(rank: dict[str, Any]) -> str:
     parts.append(
         f"<text transform='translate(12 {T + ph / 2:.1f}) rotate(-90)' class='label' text-anchor='middle'>P(select the true target-scale best)</text>"
     )
+    tags = {
+        "full": "full",
+        "ladder": "Ladder",
+        "hb-2": "H2",
+        "hb-3": "H3",
+        "hb-4": "H4",
+        "median": "M",
+        "sha-2": "A2",
+        "sha-3": "A3",
+        "sha-4": "A4",
+    }
+    offsets = {
+        "full": (-28, -12),
+        "ladder": (0, -12),
+        "hb-2": (0, -12),
+        "hb-3": (22, 4),
+        "hb-4": (22, 4),
+        "median": (-22, 4),
+        "sha-2": (-22, 4),
+        "sha-3": (0, 20),
+        "sha-4": (0, 20),
+    }
     for arm, x, y in pts:
         cx, cy = L + x * pw, T + (1 - y) * ph
         parts.append(
-            f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='6' fill='{css(arm)}' stroke='var(--surface)' stroke-width='2'><title>{html.escape(ARM_LABEL[arm])}: P={y:.2f}, compute {x:.2f}</title></circle>"
+            f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='6' fill='{css(arm)}' stroke='var(--surface)' stroke-width='2'>"
+            f"<title>{html.escape(ARM_LABEL[arm])}: P={y:.2f}, compute {x:.2f}</title></circle>"
         )
-        dy = -10 if arm in ("ladder", "full", "hb-2") else 18
+        dx, dy = offsets.get(arm, (0, 18))
         parts.append(
-            f"<text x='{cx:.1f}' y='{cy + dy:.1f}' class='tick' text-anchor='middle'>{html.escape(ARM_LABEL[arm])}</text>"
+            f"<text x='{cx + dx:.1f}' y='{cy + dy:.1f}' class='tick' text-anchor='middle'>{tags[arm]}</text>"
         )
     parts.append("</svg>")
-    return f"<figure><figcaption>Rank-flip benchmark: selection accuracy against compute, median over seeds</figcaption>{''.join(parts)}</figure>"
+    return f"<figure><figcaption>Rank-flip benchmark: selection accuracy against compute, median over seeds. H = Hyperband, A = ASHA, M = MedianPruner, with the reduction factor; colours as in the table.</figcaption>{''.join(parts)}</figure>"
 
 
 def render_html(
@@ -496,7 +529,7 @@ def render_html(
             ],
             rows,
         )
-        + f"<div class='grid'>{bars}</div><h3>Per study</h3>"
+        + f"<div style='max-width:620px'>{bars}</div><h3>Per study</h3>"
         + table(
             [
                 "arm",
@@ -581,7 +614,7 @@ ul {{ max-width:900px; }}
 </style></head>
 <body><main>
 <h1>optunai: scaling-ladder discipline inside an LLM-driven Optuna</h1>
-<p class="sub">{notes["subtitle"]}</p>
+<p class="sub">{inline_md_keep(notes["subtitle"])}</p>
 {body}
 </main></body></html>"""
 
