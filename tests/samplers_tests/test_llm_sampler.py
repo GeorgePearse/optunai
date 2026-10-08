@@ -237,7 +237,7 @@ def test_ledger_path_beside_sqlite_storage(tmp_path: Any) -> None:
     study = optuna.create_study(study_name="s", storage=storage, sampler=sampler)
     study.optimize(objective, n_trials=2)
     assert sampler.ledger.path == tmp_path / "s.ledger.jsonl"
-    assert sampler.ledger.path.exists()
+    assert sampler.ledger.path is not None and sampler.ledger.path.exists()
     reloaded = optuna.load_study(study_name="s", storage=storage)
     assert reloaded.trials[1].system_attrs["llm:hypothesis"] == "h"
 

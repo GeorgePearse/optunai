@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 import os
 from typing import Any
 from typing import TYPE_CHECKING
@@ -8,12 +9,16 @@ from typing import TYPE_CHECKING
 import optuna
 from optuna.distributions import BaseDistribution
 from optuna.samplers._base import BaseSampler
+from optuna.samplers._llm._jev import boolean
+from optuna.samplers._llm._jev import Jev
 from optuna.samplers._llm._ledger import Ledger
 from optuna.samplers._llm._model import Model
 from optuna.samplers._llm._model import ModelLike
 from optuna.samplers._llm._proposal import build_user_prompt
+from optuna.samplers._llm._proposal import ladder_section
 from optuna.samplers._llm._proposal import load_prompt
 from optuna.samplers._llm._proposal import materialise_new_param
+from optuna.samplers._llm._proposal import parse_ladder_fields
 from optuna.samplers._llm._proposal import proposal_schema
 from optuna.samplers._llm._proposal import ProposalError
 from optuna.samplers._llm._proposal import read_context
@@ -85,6 +90,18 @@ class LLMSampler(BaseSampler):
         max_trials_in_prompt: Cap on the number of trials shown; the best, the most recent and a
             spread of the rest are kept.
         max_context_chars: Cap on the context text.
+        gate: Jev gate on the expected effect. When the study has a frozen decision threshold
+            (``study.register_noise``) and ``AI_GATEWAY_API_KEY`` is set, Jev scores "is this
+            proposal's expected effect plausibly above the threshold" as a probability; below
+            ``gate`` the trial is marked ``llm:decision = defer`` and an attached
+            :class:`~optuna.ladder.Ladder` stops it before its first rung. ``0`` disables.
+        judge: The Jev instance to use for the gate; defaults to a new one when configured.
+
+    When the study carries ladder state (a frozen threshold, a fitted
+    :class:`~optuna.ladder.Ladder`, a near-optimal check), the prompt shows it and the schema
+    requires ``expected_effect``, ``predicted_target_value``, ``interval`` and ``decision``
+    per proposal; these land in ``trial.system_attrs`` under ``llm:*``. A proposal may carry
+    ``expand_bounds`` only for parameters the near-optimal check put on a boundary.
     """
 
     def __init__(
@@ -99,6 +116,8 @@ class LLMSampler(BaseSampler):
         seed: int | None = None,
         max_trials_in_prompt: int = 60,
         max_context_chars: int = 60_000,
+        gate: float = 0.0,
+        judge: Jev | None = None,
     ) -> None:
         if model is None:
             self._model: ModelLike = Model()
@@ -121,6 +140,10 @@ class LLMSampler(BaseSampler):
         self._repair_prompt, _ = load_prompt("sampler_repair.md")
         self._queue: list[tuple[tuple[str, ...], dict[str, Any]]] = []
         self._bound = False
+        if not 0.0 <= gate < 1.0:
+            raise ValueError("gate must be in [0, 1)")
+        self._gate = gate
+        self._judge = judge
 
     @property
     def model(self) -> ModelLike:
@@ -199,6 +222,7 @@ class LLMSampler(BaseSampler):
         trials = study.get_trials(
             deepcopy=False, states=(TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)
         )
+        ladder_text, expandable = ladder_section(study)
         user = build_user_prompt(
             study,
             trials,
@@ -207,8 +231,16 @@ class LLMSampler(BaseSampler):
             context_text=self._context_text,
             allow_new_params=allow_new,
             max_trials=self._max_trials_in_prompt,
+            ladder_text=ladder_text,
+            expandable=expandable,
         )
-        schema = proposal_schema(search_space, self._n_parallel, allow_new)
+        schema = proposal_schema(
+            search_space,
+            self._n_parallel,
+            allow_new,
+            ladder=bool(ladder_text),
+            expandable=expandable,
+        )
         response = self._model.complete(self._system_prompt, user, schema)
         self._ledger.write(
             "call",
@@ -309,6 +341,7 @@ class LLMSampler(BaseSampler):
                     "evidence": evidence,
                     "violations": violations,
                     "new_params": new_params[:1],
+                    "ladder": parse_ladder_fields(raw),
                 }
             )
         if len(out) < self._n_parallel:
@@ -365,6 +398,30 @@ class LLMSampler(BaseSampler):
             )
         if new_params_attr:
             attrs["llm:new_params"] = new_params_attr
+        ladder_fields = proposal.get("ladder") or {}
+        for name in (
+            "expected_effect",
+            "predicted_target_value",
+            "interval",
+            "equivalent_compute_multiplier",
+            "decision",
+            "diagnosis",
+        ):
+            if ladder_fields.get(name) is not None:
+                attrs[f"llm:{name}"] = ladder_fields[name]
+        for name, spec in (ladder_fields.get("expand_bounds") or {}).items():
+            from optuna.ladder._study import expand_bounds
+
+            accepted = expand_bounds(
+                study, name, spec["low"], spec["high"], by=f"trial {trial.number}"
+            )
+            attrs.setdefault("llm:expand_bounds", {})[name] = {**spec, "accepted": accepted}
+        gate_p = self._gate_probability(study, trial, proposal)
+        if gate_p is not None:
+            attrs["llm:gate_p"] = round(gate_p, 4)
+            if gate_p < self._gate:
+                attrs["llm:decision"] = "defer"
+                attrs["llm:gate_deferred"] = True
         for key, value in attrs.items():
             self._set_attr(study, trial, key, value)
         self._ledger.write(
@@ -378,8 +435,86 @@ class LLMSampler(BaseSampler):
             model=proposal["model"],
             prompt_hash=self._prompt_hash,
             best_at_proposal=best_value,
+            expected_effect=ladder_fields.get("expected_effect"),
+            predicted_target_value=ladder_fields.get("predicted_target_value"),
+            interval=ladder_fields.get("interval"),
+            decision=attrs.get("llm:decision"),
+            gate_p=attrs.get("llm:gate_p"),
         )
         return proposal["params"]
+
+    def _gate_probability(
+        self, study: Study, trial: FrozenTrial, proposal: dict[str, Any]
+    ) -> float | None:
+        """Jev: is the stated expected effect plausibly above the frozen threshold?"""
+        if self._gate <= 0.0:
+            return None
+        study_attrs = study._storage.get_study_system_attrs(study._study_id)
+        threshold = study_attrs.get("ladder:threshold")
+        if not isinstance(threshold, (int, float)):
+            return None
+        if self._judge is None:
+            if not Jev.configured():
+                return None
+            self._judge = Jev()
+        fields = proposal.get("ladder") or {}
+        state = json.dumps(
+            {
+                "direction": study.direction.name.lower(),
+                "decision_threshold": threshold,
+                "seed_noise_sd": study_attrs.get("ladder:seed_sd"),
+                "incumbent": study_attrs.get("ladder:incumbent"),
+                "best_so_far": trial.system_attrs.get("llm:best_at_proposal"),
+                "proposal": {
+                    "params": proposal["params"],
+                    "hypothesis": proposal["hypothesis"],
+                    "expected_effect": fields.get("expected_effect"),
+                    "predicted_target_value": fields.get("predicted_target_value"),
+                    "interval": fields.get("interval"),
+                    "decision": fields.get("decision"),
+                },
+            }
+        )
+        try:
+            usd_before = self._judge.usd
+            answer = self._judge.ask(
+                state,
+                {
+                    "above_threshold": boolean(
+                        "Is this proposal's expected effect plausibly above the decision "
+                        "threshold? Judge from the stated expected_effect, the hypothesis, "
+                        "the noise floor and how far the best so far is from the incumbent.",
+                        true="the hypothesis gives a mechanism and the expected effect is at "
+                        "least the threshold and consistent with the history",
+                        false="the expected effect is below the threshold, unstated, or the "
+                        "hypothesis does not support it",
+                    )
+                },
+            )
+            p = float(answer["above_threshold"]["p"])
+            self._ledger.write(
+                "call",
+                trial=trial.number,
+                purpose="gate",
+                model=self._judge.name,
+                prompt_hash=self._prompt_hash,
+                usd=self._judge.usd - usd_before if self._judge.usd else None,
+                latency_s=round(self._judge.last_latency_s, 3),
+            )
+            self._ledger.write(
+                "gate",
+                trial=trial.number,
+                p_above_threshold=round(p, 4),
+                gate=self._gate,
+                deferred=p < self._gate,
+                expected_effect=fields.get("expected_effect"),
+                threshold=threshold,
+            )
+            return p
+        except Exception as e:
+            _logger.warning(f"gate judge failed at trial {trial.number}: {e}")
+            self._ledger.write("gate", trial=trial.number, error=str(e)[:300])
+            return None
 
     def sample_independent(
         self,

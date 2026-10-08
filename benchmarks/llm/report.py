@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 
-def q(values: list[float], p: float) -> float | None:
+def q(values: list[float | None], p: float) -> float | None:
     vals = [v for v in values if v is not None and np.isfinite(v)]
     return float(np.percentile(vals, p)) if vals else None
 

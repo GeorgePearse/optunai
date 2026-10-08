@@ -846,6 +846,45 @@ class Study:
 
         self._stop_flag = True
 
+    # ---- scaling-ladder discipline (optuna.ladder) ------------------------------------------
+
+    @property
+    def decision_threshold(self) -> float | None:
+        """The pre-registered threshold frozen by :meth:`register_noise`; ``None`` before."""
+        from optuna.ladder._study import decision_threshold
+
+        return decision_threshold(self)
+
+    def register_noise(self, objective: Any, **kwargs: Any) -> dict[str, Any]:
+        """Measure seed noise on the incumbent and freeze :attr:`decision_threshold`.
+
+        See :func:`optuna.ladder._study.register_noise` for the arguments.
+        """
+        from optuna.ladder._study import register_noise
+
+        return register_noise(self, objective, **kwargs)
+
+    def holdout(self, objective: Any, **kwargs: Any) -> None:
+        """Register the acceptance objective that only :meth:`accept` may evaluate."""
+        from optuna.ladder._study import holdout
+
+        holdout(self, objective, **kwargs)
+
+    def accept(self, objective: Any = None, **kwargs: Any) -> Any:
+        """Fresh-seed acceptance on the holdout; returns an ``optuna.ladder.DecisionRecord``.
+
+        See :func:`optuna.ladder._study.accept` for the arguments.
+        """
+        from optuna.ladder._study import accept
+
+        return accept(self, objective, **kwargs)
+
+    def near_optimal_check(self, objective: Any = None, **kwargs: Any) -> dict[str, Any]:
+        """Joint-perturbation and boundary test of the selected point."""
+        from optuna.ladder._study import near_optimal_check
+
+        return near_optimal_check(self, objective, **kwargs)
+
     def enqueue_trial(
         self,
         params: dict[str, Any],

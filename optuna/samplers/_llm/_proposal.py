@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_INTERMEDIATE_POINTS = 8
+DECISIONS = ("select", "run_more", "insufficient_evidence", "defer")
+INVESTIGATION_STEPS = ("measurement", "config", "data", "implementation", "hardware", "recipe")
 
 
 def load_prompt(name: str) -> tuple[str, str]:
@@ -142,7 +144,12 @@ def _param_schema(dist: BaseDistribution) -> dict[str, Any]:
 
 
 def proposal_schema(
-    search_space: dict[str, BaseDistribution], n: int, allow_new_params: bool
+    search_space: dict[str, BaseDistribution],
+    n: int,
+    allow_new_params: bool,
+    *,
+    ladder: bool = False,
+    expandable: Sequence[str] = (),
 ) -> dict[str, Any]:
     proposal: dict[str, Any] = {
         "type": "object",
@@ -158,6 +165,50 @@ def proposal_schema(
         },
         "required": ["params", "hypothesis", "evidence"],
     }
+    if ladder:
+        # Post §2.3 / §6.7: every hypothesis states the effect it expects against the frozen
+        # threshold, and the proposal carries the prediction it is making.
+        proposal["properties"].update(
+            {
+                "expected_effect": {"type": "number"},
+                "predicted_target_value": {"type": "number"},
+                "interval": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "equivalent_compute_multiplier": {"type": ["number", "null"]},
+                "decision": {"type": "string", "enum": list(DECISIONS)},
+                "diagnosis": {
+                    "type": "object",
+                    "properties": {
+                        "step": {"type": "string", "enum": list(INVESTIGATION_STEPS)},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["step", "note"],
+                },
+            }
+        )
+        proposal["required"] += [
+            "expected_effect",
+            "predicted_target_value",
+            "interval",
+            "decision",
+        ]
+    if expandable:
+        proposal["properties"]["expand_bounds"] = {
+            "type": "object",
+            "properties": {
+                name: {
+                    "type": "object",
+                    "properties": {"low": {"type": "number"}, "high": {"type": "number"}},
+                    "required": ["low", "high"],
+                }
+                for name in expandable
+            },
+            "additionalProperties": False,
+        }
     if allow_new_params:
         proposal["properties"]["new_params"] = {
             "type": "array",
@@ -186,6 +237,111 @@ def proposal_schema(
     }
 
 
+def ladder_section(study: Study) -> tuple[str, list[str]]:
+    """The ladder block of the prompt and the names a bound expansion may touch.
+
+    Empty when the study registered nothing (no threshold, no ladder, no near-optimal check).
+    """
+    from optuna.ladder._study import ladder_summary
+
+    summary = ladder_summary(study)
+    fit_present = bool((summary.get("fit") or {}).get("n_units"))
+    if (
+        summary.get("threshold") is None
+        and not fit_present
+        and summary.get("near_optimal") is None
+    ):
+        return "", []
+    lines = ["# Ladder (pre-registered; every hypothesis is judged against this)"]
+    if summary.get("threshold") is not None:
+        lines.append(
+            f"seed noise floor (SD of the incumbent over seeds): {summary.get('seed_sd')}; "
+            f"decision threshold: {summary['threshold']} "
+            f"(frozen at {summary.get('threshold_frozen_at')}). A difference smaller than the "
+            "threshold is not a win; say in each hypothesis how large an effect you expect "
+            "relative to it (expected_effect, in objective units, positive = better)."
+        )
+    if summary.get("incumbent"):
+        lines.append(f"incumbent: {json.dumps(summary['incumbent'])}")
+    fit = summary.get("fit")
+    if fit:
+        lines.append(
+            "rung ladder: budgets "
+            + json.dumps(fit.get("rungs"))
+            + f", fitted form {fit.get('form')}, pooled exponent "
+            + f"{_round(float(fit.get('pooled_gamma') or 0.0))}, "
+            + f"{fit.get('n_units')} candidates completed all rungs. "
+            + ("incumbent fit: " + json.dumps(fit["incumbent"]) if fit.get("incumbent") else "")
+        )
+        lines.append(
+            "Each trial's user_attrs carry ladder:rungs (budget, value), ladder:predicted "
+            "(predicted target value, interval, decision per rung) and ladder:status_reason. "
+            "A candidate is killed only when the better end of its interval does not reach the "
+            "incumbent; early rank alone never kills."
+        )
+    expandable: list[str] = []
+    check = summary.get("near_optimal")
+    if check:
+        lines.append(f"near-optimal check of the selected point: {json.dumps(check)}")
+        expandable = list(check.get("on_boundary") or [])
+        if expandable:
+            lines.append(
+                f"These parameters sit on a search boundary: {expandable}. You may propose "
+                "expand_bounds for them only (new low/high); any other expansion is refused."
+            )
+        else:
+            lines.append("No parameter is on a boundary; do not propose expand_bounds.")
+    if summary.get("bounds"):
+        lines.append(f"bounds already expanded: {json.dumps(summary['bounds'])}")
+    if summary.get("holdout"):
+        lines.append(
+            f"holdout: {summary['holdout'].get('name')}, consumed: "
+            f"{bool(summary.get('holdout_consumed'))}. You never see holdout values."
+        )
+    lines.append(
+        "For every proposal return predicted_target_value (your prediction of the objective at "
+        "the target budget), interval [low, high] (your 90% interval for a single run), "
+        "equivalent_compute_multiplier (null unless the ladder gives you a fit to convert "
+        "with) and decision (select | run_more | insufficient_evidence | defer: what you expect "
+        "the comparison against the incumbent to conclude once the trial finishes)."
+    )
+    return "\n".join(lines), expandable
+
+
+def deviation_section(trials: Sequence[FrozenTrial]) -> str:
+    """Post §12.2: when the last trial deviated, the proposal must say what it is checking."""
+    for t in reversed(list(trials)):
+        attrs = t.user_attrs
+        reason = attrs.get("ladder:status_reason")
+        outside = attrs.get("ladder:inside_interval") is False
+        if (
+            reason in ("algorithmic_divergence", "infrastructure_failure", "implementation_error")
+            or outside
+        ):
+            desc = {
+                "trial": t.number,
+                "status_reason": reason,
+                "cause_unknown": attrs.get("ladder:cause_unknown"),
+                "error": attrs.get("ladder:error"),
+                "outside_frozen_interval": outside,
+                "prediction_error": attrs.get("ladder:prediction_error"),
+            }
+            return (
+                "# Deviation to diagnose\n"
+                + json.dumps(desc)
+                + "\nFollow the investigation order in the system prompt: include a "
+                "`diagnosis` with the step you are testing (measurement, config, data, "
+                "implementation, hardware, recipe) and a note. Do not change the recipe "
+                "(the hyperparameters that the deviating trial used) before the earlier steps "
+                "are addressed, unless the status is algorithmic_divergence with a known cause. "
+                "An infrastructure failure is not evidence against the configuration; propose "
+                "to re-run it."
+            )
+        if t.state == TrialState.COMPLETE:
+            break
+    return ""
+
+
 def build_user_prompt(
     study: Study,
     trials: Sequence[FrozenTrial],
@@ -195,6 +351,8 @@ def build_user_prompt(
     context_text: str,
     allow_new_params: bool,
     max_trials: int,
+    ladder_text: str = "",
+    expandable: Sequence[str] = (),
 ) -> str:
     directions = [d.name.lower() for d in study.directions]
     best: list[dict[str, Any]] = []
@@ -238,6 +396,18 @@ def build_user_prompt(
     ]
     if context_text:
         sections += ["", "# Context", context_text]
+    if ladder_text:
+        sections += ["", ladder_text]
+    deviation = deviation_section(trials)
+    if deviation:
+        sections += ["", deviation]
+    ladder_fields = (
+        ', "expected_effect": <number>, "predicted_target_value": <number>, '
+        '"interval": [low, high], "equivalent_compute_multiplier": <number or null>, '
+        '"decision": "select|run_more|insufficient_evidence|defer"'
+        if ladder_text
+        else ""
+    )
     sections += [
         "",
         "# Request",
@@ -245,6 +415,8 @@ def build_user_prompt(
         'Return JSON: {"proposals": [{"params": {...}, "hypothesis": "...", '
         '"evidence": [trial numbers]'
         + (', "new_params": [...]' if allow_new_params else "")
+        + ladder_fields
+        + (', "expand_bounds": {name: {"low": .., "high": ..}}' if expandable else "")
         + "}]}",
     ]
     return "\n".join(sections)
@@ -368,3 +540,47 @@ def materialise_new_param(spec: Any) -> tuple[str, BaseDistribution, Any, str]:
         raise ProposalError(f"new parameter {name!r} has unknown type {kind!r}")
     value, _ = validate_params({name: spec["value"]}, {name: dist})
     return name, dist, value[name], rationale
+
+
+def parse_ladder_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Tolerant read of the ladder fields of one proposal; missing ones become ``None``."""
+
+    def num(x: Any) -> float | None:
+        if isinstance(x, bool) or not isinstance(x, (int, float)):
+            try:
+                x = float(x)
+            except (TypeError, ValueError):
+                return None
+        return float(x) if math.isfinite(float(x)) else None
+
+    interval_raw = raw.get("interval")
+    interval: list[float] | None = None
+    if isinstance(interval_raw, (list, tuple)) and len(interval_raw) == 2:
+        lo, hi = num(interval_raw[0]), num(interval_raw[1])
+        if lo is not None and hi is not None:
+            interval = [min(lo, hi), max(lo, hi)]
+    decision = raw.get("decision")
+    diagnosis = raw.get("diagnosis")
+    if not (isinstance(diagnosis, dict) and diagnosis.get("step") in INVESTIGATION_STEPS):
+        diagnosis = None
+    else:
+        diagnosis = {"step": diagnosis["step"], "note": str(diagnosis.get("note", ""))[:500]}
+    expand: dict[str, dict[str, float]] = {}
+    for name, spec in (
+        (raw.get("expand_bounds") or {}).items()
+        if isinstance(raw.get("expand_bounds"), dict)
+        else []
+    ):
+        if isinstance(spec, dict):
+            lo, hi = num(spec.get("low")), num(spec.get("high"))
+            if lo is not None and hi is not None and lo < hi:
+                expand[str(name)] = {"low": lo, "high": hi}
+    return {
+        "expected_effect": num(raw.get("expected_effect")),
+        "predicted_target_value": num(raw.get("predicted_target_value")),
+        "interval": interval,
+        "equivalent_compute_multiplier": num(raw.get("equivalent_compute_multiplier")),
+        "decision": decision if decision in DECISIONS else None,
+        "diagnosis": diagnosis,
+        "expand_bounds": expand,
+    }

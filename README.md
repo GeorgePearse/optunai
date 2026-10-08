@@ -2,7 +2,7 @@
 
 optunai is a fork of [optuna/optuna](https://github.com/optuna/optuna) (v5.0.0, MIT). It keeps
 the `optuna` import path, every storage, the dashboard and every integration, and adds four
-public types plus one keyword:
+public types plus one keyword, and a second layer (`optuna.ladder`, below) for ladder discipline:
 
 | Added | What it does |
 |---|---|
@@ -30,15 +30,16 @@ import optuna
 
 sampler = optuna.samplers.LLMSampler(
     "openrouter/anthropic/claude-sonnet-5.5",
-    context=["train.py", "README.md"],   # what the model may read; None = numbers only
+    context=["train.py", "README.md"],  # what the model may read; None = numbers only
 )
-study = optuna.create_study(direction="maximize", sampler=sampler,
-                            pruner=optuna.pruners.LLMPruner())
+study = optuna.create_study(
+    direction="maximize", sampler=sampler, pruner=optuna.pruners.LLMPruner()
+)
 study.optimize(objective, n_trials=40)
 
 best = study.best_trial
 print(best.params, best.system_attrs["llm:hypothesis"], best.system_attrs["llm:evidence"])
-print(sampler.ledger.totals())   # USD, calls, proposals, fallbacks, violations
+print(sampler.ledger.totals())  # USD, calls, proposals, fallbacks, violations
 ```
 
 ## Benchmarks
@@ -91,6 +92,48 @@ Five seeds per arm (fewer where noted), same trial budget per problem, median [I
 | digits (max) | TPE + LLMPruner (Jev, median floor) | 0.9703 [0.9701, 0.9814] | 1950 | 102 | 0.02 |
 
 Reading: on the textbook functions every LLM arm lands on the exact optimum at its first proposal (recall, not search); on the unpublished mixed toy the numbers-only LLM arm beats TPE's final value at trial 4 and reaches 0 by trial 12 by changing one factor at a time. On gradient boosting it edges TPE on the noisy dataset and loses to TPE and random on digits. On the few-shot head the open-vocabulary arm is the best sampler (it adds `ensemble`, `input_noise`, `mixup_alpha` from the objective's docstring) and the context arm is far ahead over the first ten trials; held-out scores are level across arms. The LLM pruner spends 29-35% fewer steps than the median pruner with a 2% false-prune rate. Claude few-shot and Rosenbrock rows have fewer seeds because OpenRouter credit ran out; its synthetic fallback rate is OpenRouter 402 refusals under parallel load, not model output. Full report with regret curves: gs://visia-agent-artifacts/analysis/optunai-llm-sampler-20261007.html (portal: /admin/analytics-artefacts, name optunai-llm-sampler-20261007; DB registration retrying in tmux `optunai-register`).
+
+## Scaling-ladder discipline
+
+The second layer, `optuna.ladder`, turns a study into a ladder in the sense of Zou's
+[scaling-ladder post](https://jiaxuanzou0714.github.io/en/blog/2026/how-to-build-scientific-scaling-ladder/):
+pre-registered thresholds set from seed noise, a formal `insufficient_evidence` outcome,
+selection-bias control, a holdout that becomes development data once looked at, equivalent
+compute as the currency, rung fidelity with fitted extrapolation and frozen prediction
+intervals, and run statuses that are never deleted. Mapping from the post's sections to these
+mechanisms, and what was deliberately not ported: [docs/scaling-ladder.md](docs/scaling-ladder.md).
+
+| Added | What it does |
+|---|---|
+| `optuna.ladder.Ladder` | A pruner. The objective asks it for rungs (`for rung in ladder.rungs(trial): ...; rung.report(value)`). After each rung it fits `E + A·C^-γ` (or `E + A·ln C`, chosen on development data by leave-last-rung-out error) to the candidate's rungs, extrapolates to the target budget, builds a prediction interval from the extrapolation errors of completed candidates (bootstrapped by candidate, since rungs share a prefix), and kills only when even the better end of that interval does not reach the incumbent minus the frozen threshold. A kill needs at least two rungs: one point is early rank in disguise. The prediction made when a candidate is promoted to its last rung is frozen in the ledger and checked against the final value. `ladder.wrap(objective)` classifies failures into `completed / actively_stopped / algorithmic_divergence / infrastructure_failure / implementation_error` with a `cause_unknown` flag; infrastructure failures never enter the fits; `ladder.retry` re-enqueues and links the records. |
+| `optuna.ladder.Decision` | `select / run_more / insufficient_evidence / defer`, plus the record each comparison writes: the difference, its paired interval, the threshold it was tested against, and the equivalent compute multiplier `exp(ΔL / (γ (L − E)))` when a fitted ladder exists. |
+| `study.register_noise(objective, n_seeds=3, params=incumbent)` | Runs the incumbent at fresh seeds (outside the trial table), stores the seed SD and freezes `study.decision_threshold = max(min_effect, 2·SD)` with a timestamp, before any holdout result is read. |
+| `study.holdout(fn)`, `study.accept()`, `study.near_optimal_check()` | `accept` re-evaluates the selected trial with a new seed on the development objective (the number that is reported, next to the best-of-N and the gap between them) and compares candidate and incumbent on the holdout at the same fresh seeds; returning the record consumes the holdout, so a second `accept` is `insufficient_evidence` until a fresh holdout is registered. `near_optimal_check` perturbs the selected point jointly (log floats ×/÷√2, linear floats ±10 % of range, ints ±25 %) and reports whether the objective moves by less than the threshold and which parameters sit on a search boundary; the sampler may propose `expand_bounds` only for those. |
+
+The LLM sampler sees all of it as context, not prose: the prompt shows the noise floor, the
+frozen threshold, the incumbent, the fitted ladder and the near-optimal result; every proposal
+must state `expected_effect`, `predicted_target_value`, `interval` and `decision`; when the
+previous trial deviated it must carry a `diagnosis` following the post's investigation order
+(measurement, config, data, implementation, hardware, recipe). With `gate=p`, Jev scores
+whether the stated effect is plausibly above the threshold and a proposal below `p` is deferred
+before its first rung runs.
+
+```python
+ladder = optuna.ladder.Ladder(rungs=[0.25, 0.5, 1.0])
+study = optuna.create_study(
+    direction="maximize", sampler=optuna.samplers.LLMSampler(gate=0.25), pruner=ladder
+)
+study.register_noise(objective, n_seeds=3, params=incumbent)  # freezes the threshold
+study.holdout(holdout_objective)
+study.optimize(ladder.wrap(objective), n_trials=60)
+print(
+    study.accept(objective)
+)  # select | run_more | insufficient_evidence | defer, with the numbers
+print(study.near_optimal_check(objective)["on_boundary"])
+```
+
+Benchmarks for this layer (rank-flip, few-shot ladder, noise-floor ablation):
+[benchmarks/llm/results/ladder/summary.md](benchmarks/llm/results/ladder/summary.md).
 
 ## Sync with upstream
 

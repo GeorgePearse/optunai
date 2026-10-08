@@ -134,6 +134,24 @@ class LLMPruner(BasePruner):
             stride = max(1, len(others) // MAX_COMPARISON_TRIALS)
             others = others[::stride][:MAX_COMPARISON_TRIALS]
         pruned = study.get_trials(deepcopy=False, states=(TrialState.PRUNED,))[-4:]
+        # Post §12.1: a diverged run is evidence about the configuration; an infrastructure
+        # failure is not, so it is listed separately and never shown as a kill.
+        failed = study.get_trials(deepcopy=False, states=(TrialState.FAIL,))[-6:]
+        diverged = [
+            {
+                "number": t.number,
+                "status_reason": t.user_attrs.get("ladder:status_reason"),
+                "cause_unknown": t.user_attrs.get("ladder:cause_unknown"),
+                "curve": _compact_curve(t.intermediate_values),
+            }
+            for t in failed
+            if t.user_attrs.get("ladder:status_reason") == "algorithmic_divergence"
+        ]
+        infra = [
+            t.number
+            for t in failed
+            if t.user_attrs.get("ladder:status_reason") == "infrastructure_failure"
+        ]
         payload: dict[str, Any] = {
             "direction": direction.name.lower(),
             "running_trial": {
@@ -159,10 +177,19 @@ class LLMPruner(BasePruner):
                 for t in others
             ],
             "recently_pruned_trials": [
-                {"number": t.number, "curve": _compact_curve(t.intermediate_values)}
+                {
+                    "number": t.number,
+                    "curve": _compact_curve(t.intermediate_values),
+                    "status_reason": t.user_attrs.get("ladder:status_reason", "actively_stopped"),
+                    "stop_reason": t.user_attrs.get("ladder:stop_reason"),
+                }
                 for t in pruned
             ],
         }
+        if diverged:
+            payload["diverged_trials"] = diverged
+        if infra:
+            payload["infrastructure_failures_not_evidence"] = infra
         return json.dumps(payload)
 
     def _probability(self, state: str) -> tuple[float, str, float | None, float]:

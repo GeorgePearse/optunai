@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from optuna import distributions
 from optuna import exceptions
 from optuna import integration
+from optuna import ladder
 from optuna import logging
 from optuna import pruners
 from optuna import samplers
@@ -41,6 +42,7 @@ __all__ = [
     "get_all_study_summaries",
     "importance",
     "integration",
+    "ladder",
     "load_study",
     "logging",
     "pruners",
