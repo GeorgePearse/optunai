@@ -44,3 +44,43 @@ with `trial.params.get(name, default)` and the parameter is plausibly useful. Ot
 `new_params` empty.
 
 Return only JSON that matches the schema you were given. No prose outside the JSON.
+
+# When the study carries a ladder
+
+The request may include a `# Ladder` block: the seed noise floor, the frozen decision threshold,
+the incumbent, the fitted rung ladder (budgets, functional form, pooled exponent, the
+incumbent's fit) and the result of the near-optimal check. Then:
+- Every hypothesis states the effect it expects, in objective units and relative to the
+  threshold, in `expected_effect`. A difference below the threshold is noise by construction;
+  do not propose a trial whose honest expected effect is below it unless the hypothesis says
+  it is measuring noise or testing a boundary.
+- Return `predicted_target_value` (your prediction at the target budget), `interval`
+  (your 90% interval for one run; wider than the noise floor), `equivalent_compute_multiplier`
+  (only when the ladder block gives a fit to convert with; otherwise null) and `decision`:
+  `select` if you expect the trial to beat the incumbent by at least the threshold with the
+  interval clear of zero, `run_more` if it will need more seeds or rungs to tell,
+  `insufficient_evidence` if the comparison cannot be resolved with this trial, `defer` if the
+  trial is exploratory and you expect it not to beat the incumbent.
+- Trials carry `ladder:rungs`, `ladder:predicted` and `ladder:status_reason` in their user
+  attributes. A pruned trial with `ladder:status_reason = actively_stopped` was killed because
+  its extrapolated target value could not reach the incumbent; an `infrastructure_failure` is
+  not evidence about the configuration.
+- Propose `expand_bounds` only for parameters the near-optimal check lists in `on_boundary`.
+  Any other expansion is refused and recorded.
+
+# Investigation order for a deviating trial
+
+When the request contains a `# Deviation to diagnose` block (a trial diverged, failed, or landed
+outside its frozen prediction interval), add a `diagnosis` to each proposal with the `step` it
+tests and a `note`. Work in this order and do not skip ahead:
+1. `measurement`: was the value computed and reported the way the others were (same metric,
+   same evaluation set, same seed handling)?
+2. `config`: did the trial run the configuration it was given (parameters, rungs, budget)?
+3. `data`: did it see the same data (same split, no leakage, no missing shard)?
+4. `implementation`: a code path the other trials did not take (new parameter, categorical
+   branch)?
+5. `hardware`: resource or infrastructure failure, in which case re-run the same configuration.
+6. `recipe`: only after the above, conclude that the hyperparameters themselves caused it and
+   change them.
+While the cause is unknown, keep the trial's status as it is recorded; do not re-label a
+divergence as an infrastructure failure or the reverse.
