@@ -30,15 +30,16 @@ import optuna
 
 sampler = optuna.samplers.LLMSampler(
     "openrouter/anthropic/claude-sonnet-5.5",
-    context=["train.py", "README.md"],   # what the model may read; None = numbers only
+    context=["train.py", "README.md"],  # what the model may read; None = numbers only
 )
-study = optuna.create_study(direction="maximize", sampler=sampler,
-                            pruner=optuna.pruners.LLMPruner())
+study = optuna.create_study(
+    direction="maximize", sampler=sampler, pruner=optuna.pruners.LLMPruner()
+)
 study.optimize(objective, n_trials=40)
 
 best = study.best_trial
 print(best.params, best.system_attrs["llm:hypothesis"], best.system_attrs["llm:evidence"])
-print(sampler.ledger.totals())   # USD, calls, proposals, fallbacks, violations
+print(sampler.ledger.totals())  # USD, calls, proposals, fallbacks, violations
 ```
 
 ## Benchmarks
@@ -119,12 +120,15 @@ before its first rung runs.
 
 ```python
 ladder = optuna.ladder.Ladder(rungs=[0.25, 0.5, 1.0])
-study = optuna.create_study(direction="maximize", sampler=optuna.samplers.LLMSampler(gate=0.25),
-                            pruner=ladder)
-study.register_noise(objective, n_seeds=3, params=incumbent)   # freezes the threshold
+study = optuna.create_study(
+    direction="maximize", sampler=optuna.samplers.LLMSampler(gate=0.25), pruner=ladder
+)
+study.register_noise(objective, n_seeds=3, params=incumbent)  # freezes the threshold
 study.holdout(holdout_objective)
 study.optimize(ladder.wrap(objective), n_trials=60)
-print(study.accept(objective))        # select | run_more | insufficient_evidence | defer, with the numbers
+print(
+    study.accept(objective)
+)  # select | run_more | insufficient_evidence | defer, with the numbers
 print(study.near_optimal_check(objective)["on_boundary"])
 ```
 
