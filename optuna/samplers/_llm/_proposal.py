@@ -339,7 +339,13 @@ def materialise_new_param(spec: Any) -> tuple[str, BaseDistribution, Any, str]:
         try:
             low, high = float(spec["low"]), float(spec["high"])
         except (KeyError, TypeError, ValueError):
-            raise ProposalError(f"new parameter {name!r} needs numeric low and high") from None
+            # Bounds left out: take a range around the proposed value and say so.
+            try:
+                v = float(spec["value"])
+            except (TypeError, ValueError):
+                raise ProposalError(f"new parameter {name!r} needs numeric low and high") from None
+            low, high = min(0.0, v), max(1.0, 2.0 * v)
+            rationale += f" [bounds inferred: {low}, {high}]"
         if not (math.isfinite(low) and math.isfinite(high)) or low >= high:
             raise ProposalError(f"new parameter {name!r} has an invalid range [{low}, {high}]")
         log = bool(spec.get("log", False))
