@@ -406,32 +406,45 @@ def render(
         )
         events = []
         for a, s in arms.items():
+            by_seed: dict[int, list[dict[str, Any]]] = {}
             for e in s.get("new_params_events", []):
-                events.append(
-                    [
-                        html.escape(ARM_LABEL.get(a, a)),
-                        e["seed"],
-                        e["trial"],
-                        html.escape(
-                            json.dumps({k: v["value"] for k, v in e["new_params"].items()})
-                        ),
-                        html.escape(next(iter(e["new_params"].values()))["rationale"][:220]),
-                        e["value"],
-                        e["best_before"],
-                        "yes" if e["improved_best"] else "no",
-                    ]
-                )
+                by_seed.setdefault(e["seed"], []).append(e)
+            for seed, evs in sorted(by_seed.items()):
+                seen: dict[str, dict[str, Any]] = {}
+                for e in evs:
+                    name = next(iter(e["new_params"]))
+                    if name not in seen:
+                        seen[name] = {
+                            "first_trial": e["trial"],
+                            "first_value": e["new_params"][name]["value"],
+                            "rationale": e["new_params"][name]["rationale"],
+                            "n": 0,
+                            "improved": 0,
+                        }
+                    seen[name]["n"] += 1
+                    seen[name]["improved"] += int(bool(e["improved_best"]))
+                for name, info in seen.items():
+                    events.append(
+                        [
+                            html.escape(ARM_LABEL.get(a, a)),
+                            seed,
+                            html.escape(f"{name} = {info['first_value']}"),
+                            info["first_trial"],
+                            info["n"],
+                            info["improved"],
+                            html.escape(info["rationale"][:200]),
+                        ]
+                    )
         ev_table = (
             table(
                 [
                     "arm",
                     "seed",
-                    "trial",
-                    "new parameter",
-                    "rationale",
-                    "value",
-                    "best before",
-                    "new best?",
+                    "new parameter (first value)",
+                    "first trial",
+                    "trials carrying it",
+                    "of which set a new best",
+                    "rationale at first proposal",
                 ],
                 events,
             )
